@@ -75,20 +75,24 @@
       </label>
     </div>
 
-    <!-- サブ機能用オプション -->
+    <!-- サブ機能用オプション（複数指定・連動引っ張り対応） -->
     <div id="pullOptions" class="panel sub-panel hidden">
+      <p style="font-size: 0.8rem; color: #666; margin-bottom: 6px;">
+        ※指定モードで画面をタップすると赤い円を追加できます（複数置くと同時に動きます）
+      </p>
       <div class="sliders">
-        <label>指定エリアの広さ: <input type="range" id="pinRadiusSlider" min="30" max="200" value="80"></label>
+        <label>選択中の円の広さ: <input type="range" id="pinRadiusSlider" min="10" max="250" value="60"></label>
         <label>戻る弾力: <input type="range" id="springSlider" min="0.05" max="0.3" step="0.01" value="0.16"></label>
       </div>
       <div class="row" style="margin-top: 8px;">
-        <button type="button" id="clearPinBtn" class="btn small">指定エリアを解除（全体に戻す）</button>
+        <button type="button" id="deleteOnePinBtn" class="btn small">選択中の円を1つ削除</button>
+        <button type="button" id="clearPinBtn" class="btn small danger">すべての円を解除</button>
       </div>
     </div>
 
     <!-- キャンバス表示エリア -->
     <div class="canvas-area">
-      <canvas id="canvas" width="500" height="500"></canvas>
+      <canvas id="canvas" width="800" height="800"></canvas>
     </div>
 
     <!-- 保存ボタン -->
@@ -99,4 +103,4 @@
 
   <script src="script.js"></script>
 </body>
-</html
+</html>
