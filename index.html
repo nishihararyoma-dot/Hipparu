@@ -3,45 +3,94 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-  <title>写真合成＆引っ張りエディタ</title>
+  <title>写真合成＆レイアウトエディタ</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <div class="container">
-    <h1>写真合成＆引っ張りエディタ</h1>
+  <div class="app-container">
+    <header>
+      <h1>写真合成＆レイアウトエディタ</h1>
+    </header>
 
-    <!-- 画像読み込み -->
-    <div class="controls">
-      <label class="file-btn">
-        1. 土台の写真を選ぶ
-        <input type="file" id="bgInput" accept="image/*">
-      </label>
-      <label class="file-btn">
-        2. 重ねる写真を選ぶ
-        <input type="file" id="fgInput" accept="image/*">
-      </label>
+    <!-- メイン：画像追加＆背景作成 -->
+    <section class="panel">
+      <h2>1. ベース・背景の準備</h2>
+      <div class="row">
+        <label class="btn primary">
+          ベース写真を選ぶ（比率自動）
+          <input type="file" id="bgImageInput" accept="image/*">
+        </label>
+      </div>
+      <div class="row bg-maker">
+        <select id="aspectSelect">
+          <option value="1:1">1:1 (正方形)</option>
+          <option value="4:3">4:3 (横長)</option>
+          <option value="16:9">16:9 (ワイド)</option>
+          <option value="9:16">9:16 (スマホ縦)</option>
+        </select>
+        <select id="bgTypeSelect">
+          <option value="solid">単色背景</option>
+          <option value="gradient">グラデーション</option>
+          <option value="dots">ドット柄</option>
+          <option value="check">チェック柄</option>
+        </select>
+        <input type="color" id="bgColor1" value="#ffffff">
+        <input type="color" id="bgColor2" value="#a2d2ff">
+        <button id="createBgBtn" class="btn">背景を作成</button>
+      </div>
+    </section>
+
+    <!-- メイン：画像の重ね合わせ（レイヤー） -->
+    <section class="panel">
+      <h2>2. 写真を重ねる・サイズ変更</h2>
+      <div class="row">
+        <label class="btn primary">
+          ＋ 重ねる写真を追加
+          <input type="file" id="addLayerInput" accept="image/*">
+        </label>
+      </div>
+
+      <!-- レイヤー選択＆操作 -->
+      <div id="layerControls" class="layer-controls hidden">
+        <div class="row">
+          <select id="layerSelect"></select>
+          <button id="layerUpBtn" class="btn small">前面へ</button>
+          <button id="layerDownBtn" class="btn small">背面へ</button>
+          <button id="layerDeleteBtn" class="btn small danger">削除</button>
+        </div>
+        <div class="sliders">
+          <label>大きさ: <input type="range" id="layerScale" min="0.05" max="3.0" step="0.02" value="0.5"></label>
+          <label>回転: <input type="range" id="layerRotate" min="-180" max="180" step="1" value="0"></label>
+        </div>
+      </div>
+    </section>
+
+    <!-- モード切り替え（レイアウト編集 vs サブ機能：引っ張り） -->
+    <div class="mode-tabs">
+      <button id="tabEdit" class="tab active">✋ 配置・サイズ編集</button>
+      <button id="tabPin" class="tab">🎯 引っ張る場所を指定</button>
+      <button id="tabPull" class="tab">🤏 引っ張る（サブ）</button>
     </div>
 
-    <!-- モード切り替え -->
-    <div class="mode-switch">
-      <button id="modePull" class="active">引っ張るモード</button>
-      <button id="modeMove">重ね写真の位置移動</button>
+    <!-- サブ機能用オプション -->
+    <div id="pullOptions" class="panel sub-panel hidden">
+      <div class="sliders">
+        <label>指定エリアの広さ: <input type="range" id="pinRadiusSlider" min="30" max="200" value="80"></label>
+        <label>戻る弾力: <input type="range" id="springSlider" min="0.05" max="0.3" step="0.01" value="0.16"></label>
+      </div>
+      <div class="row">
+        <button id="clearPinBtn" class="btn small">指定エリアを解除（全体に戻す）</button>
+      </div>
     </div>
 
-    <!-- パラメータ調整 -->
-    <div class="sliders">
-      <label>重ね写真のサイズ: <input type="range" id="scaleSlider" min="0.1" max="2.0" step="0.05" value="0.5"></label>
-      <label>引っ張る範囲: <input type="range" id="radiusSlider" min="40" max="200" value="100"></label>
-      <label>戻る弾力: <input type="range" id="springSlider" min="0.05" max="0.3" step="0.01" value="0.15"></label>
+    <!-- キャンバス表示エリア -->
+    <div class="canvas-area">
+      <canvas id="canvas" width="500" height="500"></canvas>
     </div>
 
-    <!-- キャンバス -->
-    <div class="canvas-wrapper">
-      <canvas id="canvas" width="400" height="400"></canvas>
-    </div>
-
-    <div class="actions">
-      <button id="saveBtn" class="save-btn">画像を保存する</button>
+    <!-- 保存ボタン -->
+    <div class="footer-actions">
+      <button id="saveBtn" class="btn save">完成画像を保存する</button>
     </div>
   </div>
 
