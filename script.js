@@ -191,7 +191,6 @@ function renderFrame(isSaving = false) {
     }
   }
 
-  // 引っ張られている三角形が隣のメッシュに潜り込んで途切れないよう優先度スコアでソート
   const triangles = [];
   for (let r = 0; r < ROWS; r++) {
     for (let c = 0; c < COLS; c++) {
@@ -203,7 +202,6 @@ function renderFrame(isSaving = false) {
       const t1 = [points[i0], points[i1], points[i2]];
       const t2 = [points[i1], points[i3], points[i2]];
 
-      // 掴まれている点が含まれる場合、さらに高い描画優先度（+10000）を与えて絶対に最前面にする
       const grabBonus1 = (t1[0].grabbed || t1[1].grabbed || t1[2].grabbed) ? 10000 : 0;
       const grabBonus2 = (t2[0].grabbed || t2[1].grabbed || t2[2].grabbed) ? 10000 : 0;
 
@@ -282,7 +280,6 @@ function animate() {
   requestAnimationFrame(animate);
 }
 
-// 拡大（ズーム）状態でも正確にタッチ座標を取得する
 function getPos(e) {
   const rect = canvas.getBoundingClientRect();
   const clientX = e.touches ? e.touches[0].clientX : e.clientX;
@@ -431,28 +428,84 @@ document.getElementById('resetZoomBtn').addEventListener('click', () => {
   updateZoom(1.0);
 });
 
-// ファイル読み込み
+// 安全かつ確実に画像を読み込む共通関数
+function loadSafeImage(file, buttonElement, originalText, callback) {
+  if (!file) return;
+  if (buttonElement) buttonElement.textContent = '読み込み中...';
+
+  const reader = new FileReader();
+  reader.onload = (event) => {
+    const rawImg = new Image();
+    rawImg.onload = () => {
+      const maxLoadSize = 1200;
+      let w = rawImg.width;
+      let h = rawImg.height;
+
+      if (w > maxLoadSize || h > maxLoadSize) {
+        if (w >= h) {
+          h = Math.round((h / w) * maxLoadSize);
+          w = maxLoadSize;
+        } else {
+          w = Math.round((w / h) * maxLoadSize);
+          h = maxLoadSize;
+        }
+      }
+
+      const tempCanvas = document.createElement('canvas');
+      tempCanvas.width = w;
+      tempCanvas.height = h;
+      const tempCtx = tempCanvas.getContext('2d');
+      tempCtx.drawImage(rawImg, 0, 0, w, h);
+
+      const optimizedImg = new Image();
+      optimizedImg.onload = () => {
+        if (buttonElement) buttonElement.textContent = originalText;
+        callback(optimizedImg);
+      };
+      optimizedImg.onerror = () => {
+        if (buttonElement) buttonElement.textContent = originalText;
+        alert('画像の変換に失敗しました。別の画像をお試しください。');
+      };
+      optimizedImg.src = tempCanvas.toDataURL('image/png');
+    };
+
+    rawImg.onerror = () => {
+      if (buttonElement) buttonElement.textContent = originalText;
+      alert('画像の読み込みに失敗しました。');
+    };
+    rawImg.src = event.target.result;
+  };
+
+  reader.onerror = () => {
+    if (buttonElement) buttonElement.textContent = originalText;
+    alert('ファイルの取得に失敗しました。');
+  };
+
+  reader.readAsDataURL(file);
+}
+
+// 1. ベース写真読み込み
 const bgImageInput = document.getElementById('bgImageInput');
-document.getElementById('bgImageBtn').addEventListener('click', () => {
+const bgImageBtn = document.getElementById('bgImageBtn');
+
+bgImageBtn.addEventListener('click', () => {
   bgImageInput.value = '';
   bgImageInput.click();
 });
 
 bgImageInput.addEventListener('change', (e) => {
   const file = e.target.files[0];
-  if (!file) return;
-  const url = URL.createObjectURL(file);
-  const img = new Image();
-  img.onload = () => {
+  loadSafeImage(file, bgImageBtn, 'ベース写真を選ぶ（比率自動）', (img) => {
     bgConfig.img = img;
     resizeWorkspace(img.width, img.height);
-    URL.revokeObjectURL(url);
-  };
-  img.src = url;
+  });
 });
 
+// 2. 重ねる写真追加
 const addLayerInput = document.getElementById('addLayerInput');
-document.getElementById('addLayerBtn').addEventListener('click', () => {
+const addLayerBtn = document.getElementById('addLayerBtn');
+
+addLayerBtn.addEventListener('click', () => {
   addLayerInput.value = '';
   addLayerInput.click();
 });
@@ -462,12 +515,10 @@ addLayerInput.addEventListener('change', (e) => {
   if (files.length === 0) return;
 
   files.forEach((file, index) => {
-    const url = URL.createObjectURL(file);
-    const img = new Image();
-    img.onload = () => {
+    loadSafeImage(file, addLayerBtn, '＋ 重ねる写真を追加', (img) => {
       const initialScale = Math.min((docWidth * 0.45) / img.width, (docHeight * 0.45) / img.height, 1.5);
       const newLayer = {
-        id: Date.now() + index,
+        id: Date.now() + index + Math.random(),
         name: file.name.slice(0, 12),
         img: img,
         x: docWidth / 2 + (index * 20),
@@ -480,9 +531,7 @@ addLayerInput.addEventListener('change', (e) => {
       selectLayer(newLayer.id);
       renderComposite();
       switchMode('edit');
-      URL.revokeObjectURL(url);
-    };
-    img.src = url;
+    });
   });
 });
 
