@@ -4,6 +4,11 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
   <title>写真合成＆レイアウトエディタ</title>
+  <!-- ホーム画面追加用のアイコン設定（同じフォルダに icon.png を置くと反映されます） -->
+  <link rel="apple-touch-icon" href="icon.png">
+  <link rel="icon" type="image/png" href="icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="写真エディタ">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -12,7 +17,7 @@
       <h1>写真合成＆レイアウトエディタ</h1>
     </header>
 
-    <!-- メイン：画像追加＆背景作成 -->
+    <!-- 1. ベース・背景の準備 -->
     <section class="panel">
       <h2>1. ベース・背景の準備</h2>
       <div class="row">
@@ -38,12 +43,19 @@
       </div>
     </section>
 
-    <!-- メイン：画像の重ね合わせ（レイヤー） -->
+    <!-- 2. 写真・テキストの重ね合わせ -->
     <section class="panel">
-      <h2>2. 写真を重ねる・サイズ変更</h2>
+      <h2>2. 写真・テキストを追加・編集</h2>
       <div class="row">
         <button type="button" id="addLayerBtn" class="btn primary">＋ 重ねる写真を追加</button>
         <input type="file" id="addLayerInput" accept="image/*" multiple>
+      </div>
+
+      <!-- テキスト追加エリア -->
+      <div class="row text-maker">
+        <input type="text" id="textInput" placeholder="文字を入力..." class="text-input">
+        <input type="color" id="textColor" value="#111111" title="文字の色">
+        <button type="button" id="addTextBtn" class="btn">＋ テキスト追加</button>
       </div>
 
       <!-- レイヤー選択＆操作 -->
@@ -71,11 +83,11 @@
     <!-- ガイド線表示切り替え -->
     <div class="guide-toggle">
       <label>
-        <input type="checkbox" id="hideGuidesCheck"> ガイド線（青枠・赤丸）をすべて非表示にする
+        <input type="checkbox" id="hideGuidesCheck"> ガイド線（青枠・赤丸・外枠）をすべて非表示にする
       </label>
     </div>
 
-    <!-- サブ機能用オプション（複数指定・連動引っ張り対応） -->
+    <!-- サブ機能用オプション -->
     <div id="pullOptions" class="panel sub-panel hidden">
       <p style="font-size: 0.8rem; color: #666; margin-bottom: 6px;">
         ※指定モードで画面をタップすると赤い円を追加できます（複数置くと同時に動きます）
@@ -92,7 +104,7 @@
 
     <!-- キャンバス表示エリア -->
     <div class="canvas-area">
-      <canvas id="canvas" width="800" height="800"></canvas>
+      <canvas id="canvas" width="1100" height="1100"></canvas>
     </div>
 
     <!-- 保存ボタン -->
