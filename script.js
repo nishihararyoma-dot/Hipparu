@@ -11,33 +11,35 @@ let bgConfig = { type: 'solid', color1: '#ffffff', color2: '#a2d2ff', img: null 
 let layers = [];
 let selectedLayerId = null;
 
-// 引っ張り用
-let pinArea = null;
-let pinRadius = 80;
+// 引っ張り用（複数の赤い円を配列で管理）
+let pinAreas = []; // [{ id, x, y, radius }, ...]
+let selectedPinId = null;
+let pinRadius = 60;
 let stiffness = 0.16;
 const damping = 0.82;
-const COLS = 28;
-const ROWS = 28;
+const COLS = 32;
+const ROWS = 32;
 let points = [];
 
 function resizeWorkspace(width, height) {
-  const maxDim = 600;
+  const targetMax = 900;
   let w = width;
   let h = height;
-  if (w > maxDim || h > maxDim) {
-    if (w > h) {
-      h = Math.round((h / w) * maxDim);
-      w = maxDim;
-    } else {
-      w = Math.round((w / h) * maxDim);
-      h = maxDim;
-    }
+
+  if (w >= h) {
+    h = Math.round((h / w) * targetMax);
+    w = targetMax;
+  } else {
+    w = Math.round((w / h) * targetMax);
+    h = targetMax;
   }
+
   canvas.width = w;
   canvas.height = h;
   offCanvas.width = w;
   offCanvas.height = h;
-  pinArea = null;
+  pinAreas = [];
+  selectedPinId = null;
   initMesh();
   renderComposite();
 }
@@ -52,7 +54,10 @@ function initMesh() {
         ox: x, oy: y,
         x: x, y: y,
         vx: 0, vy: 0,
-        grabbed: false
+        grabbed: false,
+        influence: 0,
+        startX: x,
+        startY: y
       });
     }
   }
@@ -95,16 +100,16 @@ function drawGeneratedBackground(context, w, h) {
     context.fillStyle = color1;
     context.fillRect(0, 0, w, h);
     context.fillStyle = color2;
-    const step = 24;
-    for (let y = 12; y < h; y += step) {
-      for (let x = 12; x < w; x += step) {
+    const step = 36;
+    for (let y = 18; y < h; y += step) {
+      for (let x = 18; x < w; x += step) {
         context.beginPath();
-        context.arc(x, y, 5, 0, Math.PI * 2);
+        context.arc(x, y, 7, 0, Math.PI * 2);
         context.fill();
       }
     }
   } else if (type === 'check') {
-    const size = 30;
+    const size = 45;
     for (let y = 0; y < h; y += size) {
       for (let x = 0; x < w; x += size) {
         const isEven = ((x / size) + (y / size)) % 2 === 0;
@@ -116,11 +121,28 @@ function drawGeneratedBackground(context, w, h) {
 }
 
 function drawTexturedTriangle(p0, p1, p2) {
+  const cx = (p0.x + p1.x + p2.x) / 3;
+  const cy = (p0.y + p1.y + p2.y) / 3;
+
+  function expand(p) {
+    const dx = p.x - cx;
+    const dy = p.y - cy;
+    const len = Math.hypot(dx, dy) || 1;
+    return {
+      x: p.x + (dx / len) * 0.7,
+      y: p.y + (dy / len) * 0.7
+    };
+  }
+
+  const ep0 = expand(p0);
+  const ep1 = expand(p1);
+  const ep2 = expand(p2);
+
   ctx.save();
   ctx.beginPath();
-  ctx.moveTo(p0.x, p0.y);
-  ctx.lineTo(p1.x, p1.y);
-  ctx.lineTo(p2.x, p2.y);
+  ctx.moveTo(ep0.x, ep0.y);
+  ctx.lineTo(ep1.x, ep1.y);
+  ctx.lineTo(ep2.x, ep2.y);
   ctx.closePath();
   ctx.clip();
 
@@ -161,6 +183,8 @@ function renderFrame(isSaving = false) {
     }
   }
 
+  // 伸びている（変位が大きい）三角形ほど手前に描画
+  const triangles = [];
   for (let r = 0; r < ROWS; r++) {
     for (let c = 0; c < COLS; c++) {
       const i0 = r * (COLS + 1) + c;
@@ -168,14 +192,30 @@ function renderFrame(isSaving = false) {
       const i2 = (r + 1) * (COLS + 1) + c;
       const i3 = i2 + 1;
 
-      drawTexturedTriangle(points[i0], points[i1], points[i2]);
-      drawTexturedTriangle(points[i1], points[i3], points[i2]);
+      const t1 = [points[i0], points[i1], points[i2]];
+      const t2 = [points[i1], points[i3], points[i2]];
+
+      const disp1 = Math.hypot(t1[0].x - t1[0].ox, t1[0].y - t1[0].oy) +
+                    Math.hypot(t1[1].x - t1[1].ox, t1[1].y - t1[1].oy) +
+                    Math.hypot(t1[2].x - t1[2].ox, t1[2].y - t1[2].oy);
+
+      const disp2 = Math.hypot(t2[0].x - t2[0].ox, t2[0].y - t2[0].oy) +
+                    Math.hypot(t2[1].x - t2[1].ox, t2[1].y - t2[1].oy) +
+                    Math.hypot(t2[2].x - t2[2].ox, t2[2].y - t2[2].oy);
+
+      triangles.push({ pts: t1, disp: disp1 });
+      triangles.push({ pts: t2, disp: disp2 });
     }
+  }
+
+  triangles.sort((a, b) => a.disp - b.disp);
+
+  for (let tri of triangles) {
+    drawTexturedTriangle(tri.pts[0], tri.pts[1], tri.pts[2]);
   }
 
   // 保存時ではなく、かつガイド線非表示がオフの場合のみ線を描画
   if (!isSaving && !hideGuides) {
-    // 編集モード時の選択レイヤー枠
     if (mode === 'edit' && selectedLayerId) {
       const layer = layers.find(l => l.id === selectedLayerId);
       if (layer) {
@@ -185,25 +225,35 @@ function renderFrame(isSaving = false) {
         const lw = layer.img.width * layer.scale;
         const lh = layer.img.height * layer.scale;
         ctx.strokeStyle = '#1877f2';
-        ctx.lineWidth = 2;
-        ctx.setLineDash([5, 5]);
+        ctx.lineWidth = 3;
+        ctx.setLineDash([8, 8]);
         ctx.strokeRect(-lw / 2, -lh / 2, lw, lh);
         ctx.restore();
       }
     }
 
-    // 「引っ張る場所を指定(pin)」モードの時だけ赤い円を表示（「引っ張る(pull)」時は透明になる）
-    if (mode === 'pin' && pinArea) {
-      ctx.save();
-      ctx.beginPath();
-      ctx.arc(pinArea.x, pinArea.y, pinArea.radius, 0, Math.PI * 2);
-      ctx.strokeStyle = 'rgba(228, 30, 63, 0.85)';
-      ctx.lineWidth = 2.5;
-      ctx.setLineDash([6, 4]);
-      ctx.stroke();
-      ctx.fillStyle = 'rgba(228, 30, 63, 0.12)';
-      ctx.fill();
-      ctx.restore();
+    // 「引っ張る場所を指定(pin)」モードの時だけ、配置されたすべての赤い円を表示
+    if (mode === 'pin' && pinAreas.length > 0) {
+      pinAreas.forEach((pin, index) => {
+        const isSelected = pin.id === selectedPinId;
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(pin.x, pin.y, pin.radius, 0, Math.PI * 2);
+        ctx.strokeStyle = isSelected ? 'rgba(228, 30, 63, 1.0)' : 'rgba(228, 30, 63, 0.55)';
+        ctx.lineWidth = isSelected ? 4 : 2.5;
+        ctx.setLineDash([8, 6]);
+        ctx.stroke();
+        ctx.fillStyle = isSelected ? 'rgba(228, 30, 63, 0.2)' : 'rgba(228, 30, 63, 0.08)';
+        ctx.fill();
+
+        // 番号ラベル
+        ctx.fillStyle = '#e41e3f';
+        ctx.font = 'bold 16px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(String(index + 1), pin.x, pin.y);
+        ctx.restore();
+      });
     }
   }
 }
@@ -225,6 +275,7 @@ function getPos(e) {
 
 let isDragging = false;
 let dragOffset = { x: 0, y: 0 };
+let pullDragStart = { x: 0, y: 0 };
 
 canvas.addEventListener('pointerdown', (e) => {
   isDragging = true;
@@ -242,26 +293,64 @@ canvas.addEventListener('pointerdown', (e) => {
       }
     }
   } else if (mode === 'pin') {
-    pinArea = { x: pos.x, y: pos.y, radius: pinRadius };
-  } else if (mode === 'pull') {
-    if (pinArea) {
-      const distToPin = Math.hypot(pos.x - pinArea.x, pos.y - pinArea.y);
-      if (distToPin > pinArea.radius) return;
+    // すでに置いてある赤い円の中をタップした場合は、その円を選択して移動モードにする
+    for (let i = pinAreas.length - 1; i >= 0; i--) {
+      const pin = pinAreas[i];
+      if (Math.hypot(pos.x - pin.x, pos.y - pin.y) <= pin.radius) {
+        selectedPinId = pin.id;
+        document.getElementById('pinRadiusSlider').value = pin.radius;
+        dragOffset = { x: pos.x - pin.x, y: pos.y - pin.y };
+        return;
+      }
     }
 
-    const activeRadius = pinArea ? pinArea.radius : pinRadius;
-    const centerX = pinArea ? pinArea.x : pos.x;
-    const centerY = pinArea ? pinArea.y : pos.y;
+    // 何もない場所をタップした場合は、新しい赤い円を追加する
+    const newPin = {
+      id: Date.now() + Math.random(),
+      x: pos.x,
+      y: pos.y,
+      radius: Number(document.getElementById('pinRadiusSlider').value)
+    };
+    pinAreas.push(newPin);
+    selectedPinId = newPin.id;
+    dragOffset = { x: 0, y: 0 };
 
-    for (let p of points) {
-      const dist = Math.hypot(p.ox - centerX, p.oy - centerY);
-      if (dist < activeRadius) {
-        p.grabbed = true;
-        p.influence = Math.cos((dist / activeRadius) * (Math.PI / 2));
-        p.startX = p.x;
-        p.startY = p.y;
-        p.dragStartX = pos.x;
-        p.dragStartY = pos.y;
+  } else if (mode === 'pull') {
+    pullDragStart = { x: pos.x, y: pos.y };
+
+    if (pinAreas.length > 0) {
+      // 置かれている赤い円のどれか1つでもタップされたか判定
+      const hitAnyPin = pinAreas.some(pin => Math.hypot(pos.x - pin.x, pos.y - pin.y) <= pin.radius);
+      if (!hitAnyPin) return;
+
+      // すべての赤い円の中にあるメッシュ頂点を同時に掴む
+      for (let p of points) {
+        let maxInf = 0;
+        for (let pin of pinAreas) {
+          const dist = Math.hypot(p.ox - pin.x, p.oy - pin.y);
+          if (dist < pin.radius) {
+            const inf = Math.cos((dist / pin.radius) * (Math.PI / 2));
+            if (inf > maxInf) maxInf = inf;
+          }
+        }
+        if (maxInf > 0) {
+          p.grabbed = true;
+          p.influence = maxInf;
+          p.startX = p.x;
+          p.startY = p.y;
+        }
+      }
+    } else {
+      // 指定円が1つもない場合はタッチした場所の周囲を引っ張る
+      const activeRadius = Number(document.getElementById('pinRadiusSlider').value);
+      for (let p of points) {
+        const dist = Math.hypot(p.ox - pos.x, p.oy - pos.y);
+        if (dist < activeRadius) {
+          p.grabbed = true;
+          p.influence = Math.cos((dist / activeRadius) * (Math.PI / 2));
+          p.startX = p.x;
+          p.startY = p.y;
+        }
       }
     }
   }
@@ -278,13 +367,17 @@ canvas.addEventListener('pointermove', (e) => {
       layer.y = pos.y - dragOffset.y;
       renderComposite();
     }
-  } else if (mode === 'pin') {
-    pinArea = { x: pos.x, y: pos.y, radius: pinRadius };
+  } else if (mode === 'pin' && selectedPinId) {
+    const pin = pinAreas.find(p => p.id === selectedPinId);
+    if (pin) {
+      pin.x = pos.x - dragOffset.x;
+      pin.y = pos.y - dragOffset.y;
+    }
   } else if (mode === 'pull') {
+    const moveX = pos.x - pullDragStart.x;
+    const moveY = pos.y - pullDragStart.y;
     for (let p of points) {
       if (p.grabbed) {
-        const moveX = pos.x - p.dragStartX;
-        const moveY = pos.y - p.dragStartY;
         p.x = p.startX + moveX * p.influence;
         p.y = p.startY + moveY * p.influence;
         p.vx = 0;
@@ -301,7 +394,7 @@ window.addEventListener('pointerup', () => {
   }
 });
 
-// 確実にファイル選択ダイアログを開くボタン連携
+// ファイル読み込み
 const bgImageInput = document.getElementById('bgImageInput');
 document.getElementById('bgImageBtn').addEventListener('click', () => {
   bgImageInput.value = '';
@@ -335,13 +428,13 @@ addLayerInput.addEventListener('change', (e) => {
     const url = URL.createObjectURL(file);
     const img = new Image();
     img.onload = () => {
-      const initialScale = Math.min((canvas.width * 0.5) / img.width, (canvas.height * 0.5) / img.height, 1);
+      const initialScale = Math.min((canvas.width * 0.45) / img.width, (canvas.height * 0.45) / img.height, 1.5);
       const newLayer = {
         id: Date.now() + index,
         name: file.name.slice(0, 12),
         img: img,
-        x: canvas.width / 2 + (index * 15),
-        y: canvas.height / 2 + (index * 15),
+        x: canvas.width / 2 + (index * 20),
+        y: canvas.height / 2 + (index * 20),
         scale: Number(initialScale.toFixed(2)),
         rotation: 0
       };
@@ -356,7 +449,6 @@ addLayerInput.addEventListener('change', (e) => {
   });
 });
 
-// 背景作成ボタン
 document.getElementById('createBgBtn').addEventListener('click', () => {
   const aspect = document.getElementById('aspectSelect').value;
   const [aw, ah] = aspect.split(':').map(Number);
@@ -364,10 +456,9 @@ document.getElementById('createBgBtn').addEventListener('click', () => {
   bgConfig.type = document.getElementById('bgTypeSelect').value;
   bgConfig.color1 = document.getElementById('bgColor1').value;
   bgConfig.color2 = document.getElementById('bgColor2').value;
-  resizeWorkspace(aw * 150, ah * 150);
+  resizeWorkspace(aw * 200, ah * 200);
 });
 
-// レイヤーUI更新
 function updateLayerSelectUI() {
   const select = document.getElementById('layerSelect');
   const controls = document.getElementById('layerControls');
@@ -445,7 +536,6 @@ document.getElementById('layerDeleteBtn').addEventListener('click', () => {
   renderComposite();
 });
 
-// モード切り替え
 function switchMode(newMode) {
   mode = newMode;
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
@@ -466,27 +556,36 @@ document.getElementById('tabEdit').addEventListener('click', () => switchMode('e
 document.getElementById('tabPin').addEventListener('click', () => switchMode('pin'));
 document.getElementById('tabPull').addEventListener('click', () => switchMode('pull'));
 
-// ガイド線非表示トグル
 document.getElementById('hideGuidesCheck').addEventListener('change', (e) => {
   hideGuides = e.target.checked;
 });
 
 document.getElementById('pinRadiusSlider').addEventListener('input', (e) => {
-  pinRadius = Number(e.target.value);
-  if (pinArea) pinArea.radius = pinRadius;
+  const newRadius = Number(e.target.value);
+  if (selectedPinId) {
+    const pin = pinAreas.find(p => p.id === selectedPinId);
+    if (pin) pin.radius = newRadius;
+  }
 });
 
 document.getElementById('springSlider').addEventListener('input', (e) => {
   stiffness = Number(e.target.value);
 });
 
-document.getElementById('clearPinBtn').addEventListener('click', () => {
-  pinArea = null;
+document.getElementById('deleteOnePinBtn').addEventListener('click', () => {
+  if (selectedPinId) {
+    pinAreas = pinAreas.filter(p => p.id !== selectedPinId);
+    selectedPinId = pinAreas.length > 0 ? pinAreas[pinAreas.length - 1].id : null;
+  }
 });
 
-// 確実な画像ダウンロード処理（Blob生成）
+document.getElementById('clearPinBtn').addEventListener('click', () => {
+  pinAreas = [];
+  selectedPinId = null;
+});
+
 document.getElementById('saveBtn').addEventListener('click', () => {
-  renderFrame(true); // ガイド線を消した状態で描画
+  renderFrame(true);
   canvas.toBlob((blob) => {
     if (!blob) {
       alert('画像の生成に失敗しました。');
@@ -504,5 +603,5 @@ document.getElementById('saveBtn').addEventListener('click', () => {
 });
 
 // 初期起動
-resizeWorkspace(500, 500);
+resizeWorkspace(800, 800);
 animate();
