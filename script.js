@@ -4,25 +4,22 @@ const ctx = canvas.getContext('2d');
 const offCanvas = document.createElement('canvas');
 const offCtx = offCanvas.getContext('2d');
 
-// 枠外まで引っ張っても途切れないように周囲に設ける余白（ピクセル）
 const PAD = 160;
 let docWidth = 800;
 let docHeight = 800;
 
-// アプリの状態
-let mode = 'edit'; // 'edit' | 'pin' | 'pull'
+let mode = 'edit';
 let hideGuides = false;
 let bgConfig = { type: 'solid', color1: '#ffffff', color2: '#a2d2ff', img: null };
-let layers = []; // { id, name, img, x, y, scale, rotation }
+let layers = [];
 let selectedLayerId = null;
 
-// 引っ張り用
 let pinAreas = [];
 let selectedPinId = null;
 let stiffness = 0.16;
 const damping = 0.82;
-const COLS = 32;
-const ROWS = 32;
+const COLS = 36;
+const ROWS = 36;
 let points = [];
 
 function resizeWorkspace(width, height) {
@@ -41,7 +38,6 @@ function resizeWorkspace(width, height) {
   docWidth = w;
   docHeight = h;
 
-  // 表示・変形用キャンバスには周囲の余白(PAD)を含めることで枠外への伸びを表示可能にする
   canvas.width = docWidth + PAD * 2;
   canvas.height = docHeight + PAD * 2;
   offCanvas.width = docWidth;
@@ -57,10 +53,8 @@ function initMesh() {
   points = [];
   for (let r = 0; r <= ROWS; r++) {
     for (let c = 0; c <= COLS; c++) {
-      // 画像本来の座標 (0 〜 docWidth)
       const ox = (c / COLS) * docWidth;
       const oy = (r / ROWS) * docHeight;
-      // 画面上の表示座標 (PAD 分だけ内側に配置)
       const x = ox + PAD;
       const y = oy + PAD;
       points.push({
@@ -143,8 +137,8 @@ function drawTexturedTriangle(p0, p1, p2) {
     const dy = p.y - cy;
     const len = Math.hypot(dx, dy) || 1;
     return {
-      x: p.x + (dx / len) * 0.7,
-      y: p.y + (dy / len) * 0.7
+      x: p.x + (dx / len) * 0.75,
+      y: p.y + (dy / len) * 0.75
     };
   }
 
@@ -197,7 +191,7 @@ function renderFrame(isSaving = false) {
     }
   }
 
-  // 伸びている（変位が大きい）三角形ほど最前面に描画
+  // 引っ張られている三角形が隣のメッシュに潜り込んで途切れないよう優先度スコアでソート
   const triangles = [];
   for (let r = 0; r < ROWS; r++) {
     for (let c = 0; c < COLS; c++) {
@@ -209,28 +203,34 @@ function renderFrame(isSaving = false) {
       const t1 = [points[i0], points[i1], points[i2]];
       const t2 = [points[i1], points[i3], points[i2]];
 
-      const disp1 = Math.hypot(t1[0].x - t1[0].baseX, t1[0].y - t1[0].baseY) +
-                    Math.hypot(t1[1].x - t1[1].baseX, t1[1].y - t1[1].baseY) +
-                    Math.hypot(t1[2].x - t1[2].baseX, t1[2].y - t1[2].baseY);
+      // 掴まれている点が含まれる場合、さらに高い描画優先度（+10000）を与えて絶対に最前面にする
+      const grabBonus1 = (t1[0].grabbed || t1[1].grabbed || t1[2].grabbed) ? 10000 : 0;
+      const grabBonus2 = (t2[0].grabbed || t2[1].grabbed || t2[2].grabbed) ? 10000 : 0;
 
-      const disp2 = Math.hypot(t2[0].x - t2[0].baseX, t2[0].y - t2[0].baseY) +
-                    Math.hypot(t2[1].x - t2[1].baseX, t2[1].y - t2[1].baseY) +
-                    Math.hypot(t2[2].x - t2[2].baseX, t2[2].y - t2[2].baseY);
+      const disp1 = Math.max(
+        Math.hypot(t1[0].x - t1[0].baseX, t1[0].y - t1[0].baseY),
+        Math.hypot(t1[1].x - t1[1].baseX, t1[1].y - t1[1].baseY),
+        Math.hypot(t1[2].x - t1[2].baseX, t1[2].y - t1[2].baseY)
+      ) + grabBonus1;
 
-      triangles.push({ pts: t1, disp: disp1 });
-      triangles.push({ pts: t2, disp: disp2 });
+      const disp2 = Math.max(
+        Math.hypot(t2[0].x - t2[0].baseX, t2[0].y - t2[0].baseY),
+        Math.hypot(t2[1].x - t2[1].baseX, t2[1].y - t2[1].baseY),
+        Math.hypot(t2[2].x - t2[2].baseX, t2[2].y - t2[2].baseY)
+      ) + grabBonus2;
+
+      triangles.push({ pts: t1, score: disp1 });
+      triangles.push({ pts: t2, score: disp2 });
     }
   }
 
-  triangles.sort((a, b) => a.disp - b.disp);
+  triangles.sort((a, b) => a.score - b.score);
 
   for (let tri of triangles) {
     drawTexturedTriangle(tri.pts[0], tri.pts[1], tri.pts[2]);
   }
 
-  // 保存時ではなく、かつガイド線非表示がオフの場合のみ線を描画
   if (!isSaving && !hideGuides) {
-    // 画像の境界枠（どこまでが画像エリアかを示す薄い枠）
     ctx.save();
     ctx.strokeStyle = 'rgba(0, 0, 0, 0.25)';
     ctx.lineWidth = 2;
@@ -282,6 +282,7 @@ function animate() {
   requestAnimationFrame(animate);
 }
 
+// 拡大（ズーム）状態でも正確にタッチ座標を取得する
 function getPos(e) {
   const rect = canvas.getBoundingClientRect();
   const clientX = e.touches ? e.touches[0].clientX : e.clientX;
@@ -410,7 +411,27 @@ window.addEventListener('pointerup', () => {
   }
 });
 
-// ファイル読み込み（ベース画像）
+// 拡大（ズーム）コントロール
+const zoomSlider = document.getElementById('zoomSlider');
+const zoomLabel = document.getElementById('zoomLabel');
+const canvasZoomWrapper = document.getElementById('canvasZoomWrapper');
+
+function updateZoom(val) {
+  const percent = Math.round(val * 100);
+  zoomLabel.textContent = `${percent}%`;
+  canvasZoomWrapper.style.width = `${percent}%`;
+}
+
+zoomSlider.addEventListener('input', (e) => {
+  updateZoom(Number(e.target.value));
+});
+
+document.getElementById('resetZoomBtn').addEventListener('click', () => {
+  zoomSlider.value = 1.0;
+  updateZoom(1.0);
+});
+
+// ファイル読み込み
 const bgImageInput = document.getElementById('bgImageInput');
 document.getElementById('bgImageBtn').addEventListener('click', () => {
   bgImageInput.value = '';
@@ -430,7 +451,6 @@ bgImageInput.addEventListener('change', (e) => {
   img.src = url;
 });
 
-// ファイル読み込み（重ねる写真）
 const addLayerInput = document.getElementById('addLayerInput');
 document.getElementById('addLayerBtn').addEventListener('click', () => {
   addLayerInput.value = '';
@@ -466,7 +486,6 @@ addLayerInput.addEventListener('change', (e) => {
   });
 });
 
-// テキストレイヤー追加機能
 document.getElementById('addTextBtn').addEventListener('click', () => {
   const input = document.getElementById('textInput');
   const text = input.value.trim();
@@ -474,7 +493,6 @@ document.getElementById('addTextBtn').addEventListener('click', () => {
 
   const color = document.getElementById('textColor').value;
 
-  // 高解像度で文字を描画した画像を生成してレイヤーとして追加
   const tCanvas = document.createElement('canvas');
   const tCtx = tCanvas.getContext('2d');
   const fontSize = 80;
@@ -646,7 +664,6 @@ document.getElementById('clearPinBtn').addEventListener('click', () => {
   selectedPinId = null;
 });
 
-// 保存時は余白(PAD)を切り抜いた本来の画像エリアだけを書き出す
 document.getElementById('saveBtn').addEventListener('click', () => {
   renderFrame(true);
 
