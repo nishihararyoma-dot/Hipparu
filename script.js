@@ -4,17 +4,21 @@ const ctx = canvas.getContext('2d');
 const offCanvas = document.createElement('canvas');
 const offCtx = offCanvas.getContext('2d');
 
+// 枠外まで引っ張っても途切れないように周囲に設ける余白（ピクセル）
+const PAD = 160;
+let docWidth = 800;
+let docHeight = 800;
+
 // アプリの状態
 let mode = 'edit'; // 'edit' | 'pin' | 'pull'
 let hideGuides = false;
 let bgConfig = { type: 'solid', color1: '#ffffff', color2: '#a2d2ff', img: null };
-let layers = [];
+let layers = []; // { id, name, img, x, y, scale, rotation }
 let selectedLayerId = null;
 
-// 引っ張り用（複数の赤い円を配列で管理）
-let pinAreas = []; // [{ id, x, y, radius }, ...]
+// 引っ張り用
+let pinAreas = [];
 let selectedPinId = null;
-let pinRadius = 60;
 let stiffness = 0.16;
 const damping = 0.82;
 const COLS = 32;
@@ -22,7 +26,7 @@ const ROWS = 32;
 let points = [];
 
 function resizeWorkspace(width, height) {
-  const targetMax = 900;
+  const targetMax = 800;
   let w = width;
   let h = height;
 
@@ -34,10 +38,15 @@ function resizeWorkspace(width, height) {
     h = targetMax;
   }
 
-  canvas.width = w;
-  canvas.height = h;
-  offCanvas.width = w;
-  offCanvas.height = h;
+  docWidth = w;
+  docHeight = h;
+
+  // 表示・変形用キャンバスには周囲の余白(PAD)を含めることで枠外への伸びを表示可能にする
+  canvas.width = docWidth + PAD * 2;
+  canvas.height = docHeight + PAD * 2;
+  offCanvas.width = docWidth;
+  offCanvas.height = docHeight;
+
   pinAreas = [];
   selectedPinId = null;
   initMesh();
@@ -48,10 +57,15 @@ function initMesh() {
   points = [];
   for (let r = 0; r <= ROWS; r++) {
     for (let c = 0; c <= COLS; c++) {
-      const x = (c / COLS) * canvas.width;
-      const y = (r / ROWS) * canvas.height;
+      // 画像本来の座標 (0 〜 docWidth)
+      const ox = (c / COLS) * docWidth;
+      const oy = (r / ROWS) * docHeight;
+      // 画面上の表示座標 (PAD 分だけ内側に配置)
+      const x = ox + PAD;
+      const y = oy + PAD;
       points.push({
-        ox: x, oy: y,
+        ox: ox, oy: oy,
+        baseX: x, baseY: y,
         x: x, y: y,
         vx: 0, vy: 0,
         grabbed: false,
@@ -174,8 +188,8 @@ function renderFrame(isSaving = false) {
 
   for (let p of points) {
     if (!p.grabbed) {
-      const fx = (p.ox - p.x) * stiffness;
-      const fy = (p.oy - p.y) * stiffness;
+      const fx = (p.baseX - p.x) * stiffness;
+      const fy = (p.baseY - p.y) * stiffness;
       p.vx = (p.vx + fx) * damping;
       p.vy = (p.vy + fy) * damping;
       p.x += p.vx;
@@ -183,7 +197,7 @@ function renderFrame(isSaving = false) {
     }
   }
 
-  // 伸びている（変位が大きい）三角形ほど手前に描画
+  // 伸びている（変位が大きい）三角形ほど最前面に描画
   const triangles = [];
   for (let r = 0; r < ROWS; r++) {
     for (let c = 0; c < COLS; c++) {
@@ -195,13 +209,13 @@ function renderFrame(isSaving = false) {
       const t1 = [points[i0], points[i1], points[i2]];
       const t2 = [points[i1], points[i3], points[i2]];
 
-      const disp1 = Math.hypot(t1[0].x - t1[0].ox, t1[0].y - t1[0].oy) +
-                    Math.hypot(t1[1].x - t1[1].ox, t1[1].y - t1[1].oy) +
-                    Math.hypot(t1[2].x - t1[2].ox, t1[2].y - t1[2].oy);
+      const disp1 = Math.hypot(t1[0].x - t1[0].baseX, t1[0].y - t1[0].baseY) +
+                    Math.hypot(t1[1].x - t1[1].baseX, t1[1].y - t1[1].baseY) +
+                    Math.hypot(t1[2].x - t1[2].baseX, t1[2].y - t1[2].baseY);
 
-      const disp2 = Math.hypot(t2[0].x - t2[0].ox, t2[0].y - t2[0].oy) +
-                    Math.hypot(t2[1].x - t2[1].ox, t2[1].y - t2[1].oy) +
-                    Math.hypot(t2[2].x - t2[2].ox, t2[2].y - t2[2].oy);
+      const disp2 = Math.hypot(t2[0].x - t2[0].baseX, t2[0].y - t2[0].baseY) +
+                    Math.hypot(t2[1].x - t2[1].baseX, t2[1].y - t2[1].baseY) +
+                    Math.hypot(t2[2].x - t2[2].baseX, t2[2].y - t2[2].baseY);
 
       triangles.push({ pts: t1, disp: disp1 });
       triangles.push({ pts: t2, disp: disp2 });
@@ -216,11 +230,18 @@ function renderFrame(isSaving = false) {
 
   // 保存時ではなく、かつガイド線非表示がオフの場合のみ線を描画
   if (!isSaving && !hideGuides) {
+    // 画像の境界枠（どこまでが画像エリアかを示す薄い枠）
+    ctx.save();
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.25)';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(PAD, PAD, docWidth, docHeight);
+    ctx.restore();
+
     if (mode === 'edit' && selectedLayerId) {
       const layer = layers.find(l => l.id === selectedLayerId);
       if (layer) {
         ctx.save();
-        ctx.translate(layer.x, layer.y);
+        ctx.translate(layer.x + PAD, layer.y + PAD);
         ctx.rotate((layer.rotation * Math.PI) / 180);
         const lw = layer.img.width * layer.scale;
         const lh = layer.img.height * layer.scale;
@@ -232,7 +253,6 @@ function renderFrame(isSaving = false) {
       }
     }
 
-    // 「引っ張る場所を指定(pin)」モードの時だけ、配置されたすべての赤い円を表示
     if (mode === 'pin' && pinAreas.length > 0) {
       pinAreas.forEach((pin, index) => {
         const isSelected = pin.id === selectedPinId;
@@ -246,7 +266,6 @@ function renderFrame(isSaving = false) {
         ctx.fillStyle = isSelected ? 'rgba(228, 30, 63, 0.2)' : 'rgba(228, 30, 63, 0.08)';
         ctx.fill();
 
-        // 番号ラベル
         ctx.fillStyle = '#e41e3f';
         ctx.font = 'bold 16px sans-serif';
         ctx.textAlign = 'center';
@@ -282,18 +301,19 @@ canvas.addEventListener('pointerdown', (e) => {
   const pos = getPos(e);
 
   if (mode === 'edit') {
+    const docX = pos.x - PAD;
+    const docY = pos.y - PAD;
     for (let i = layers.length - 1; i >= 0; i--) {
       const l = layers[i];
       const hw = (l.img.width * l.scale) / 2;
       const hh = (l.img.height * l.scale) / 2;
-      if (Math.abs(pos.x - l.x) <= hw && Math.abs(pos.y - l.y) <= hh) {
+      if (Math.abs(docX - l.x) <= hw && Math.abs(docY - l.y) <= hh) {
         selectLayer(l.id);
-        dragOffset = { x: pos.x - l.x, y: pos.y - l.y };
+        dragOffset = { x: docX - l.x, y: docY - l.y };
         return;
       }
     }
   } else if (mode === 'pin') {
-    // すでに置いてある赤い円の中をタップした場合は、その円を選択して移動モードにする
     for (let i = pinAreas.length - 1; i >= 0; i--) {
       const pin = pinAreas[i];
       if (Math.hypot(pos.x - pin.x, pos.y - pin.y) <= pin.radius) {
@@ -304,7 +324,6 @@ canvas.addEventListener('pointerdown', (e) => {
       }
     }
 
-    // 何もない場所をタップした場合は、新しい赤い円を追加する
     const newPin = {
       id: Date.now() + Math.random(),
       x: pos.x,
@@ -319,15 +338,13 @@ canvas.addEventListener('pointerdown', (e) => {
     pullDragStart = { x: pos.x, y: pos.y };
 
     if (pinAreas.length > 0) {
-      // 置かれている赤い円のどれか1つでもタップされたか判定
       const hitAnyPin = pinAreas.some(pin => Math.hypot(pos.x - pin.x, pos.y - pin.y) <= pin.radius);
       if (!hitAnyPin) return;
 
-      // すべての赤い円の中にあるメッシュ頂点を同時に掴む
       for (let p of points) {
         let maxInf = 0;
         for (let pin of pinAreas) {
-          const dist = Math.hypot(p.ox - pin.x, p.oy - pin.y);
+          const dist = Math.hypot(p.baseX - pin.x, p.baseY - pin.y);
           if (dist < pin.radius) {
             const inf = Math.cos((dist / pin.radius) * (Math.PI / 2));
             if (inf > maxInf) maxInf = inf;
@@ -341,10 +358,9 @@ canvas.addEventListener('pointerdown', (e) => {
         }
       }
     } else {
-      // 指定円が1つもない場合はタッチした場所の周囲を引っ張る
       const activeRadius = Number(document.getElementById('pinRadiusSlider').value);
       for (let p of points) {
-        const dist = Math.hypot(p.ox - pos.x, p.oy - pos.y);
+        const dist = Math.hypot(p.baseX - pos.x, p.baseY - pos.y);
         if (dist < activeRadius) {
           p.grabbed = true;
           p.influence = Math.cos((dist / activeRadius) * (Math.PI / 2));
@@ -363,8 +379,8 @@ canvas.addEventListener('pointermove', (e) => {
   if (mode === 'edit' && selectedLayerId) {
     const layer = layers.find(l => l.id === selectedLayerId);
     if (layer) {
-      layer.x = pos.x - dragOffset.x;
-      layer.y = pos.y - dragOffset.y;
+      layer.x = (pos.x - PAD) - dragOffset.x;
+      layer.y = (pos.y - PAD) - dragOffset.y;
       renderComposite();
     }
   } else if (mode === 'pin' && selectedPinId) {
@@ -394,7 +410,7 @@ window.addEventListener('pointerup', () => {
   }
 });
 
-// ファイル読み込み
+// ファイル読み込み（ベース画像）
 const bgImageInput = document.getElementById('bgImageInput');
 document.getElementById('bgImageBtn').addEventListener('click', () => {
   bgImageInput.value = '';
@@ -414,6 +430,7 @@ bgImageInput.addEventListener('change', (e) => {
   img.src = url;
 });
 
+// ファイル読み込み（重ねる写真）
 const addLayerInput = document.getElementById('addLayerInput');
 document.getElementById('addLayerBtn').addEventListener('click', () => {
   addLayerInput.value = '';
@@ -428,13 +445,13 @@ addLayerInput.addEventListener('change', (e) => {
     const url = URL.createObjectURL(file);
     const img = new Image();
     img.onload = () => {
-      const initialScale = Math.min((canvas.width * 0.45) / img.width, (canvas.height * 0.45) / img.height, 1.5);
+      const initialScale = Math.min((docWidth * 0.45) / img.width, (docHeight * 0.45) / img.height, 1.5);
       const newLayer = {
         id: Date.now() + index,
         name: file.name.slice(0, 12),
         img: img,
-        x: canvas.width / 2 + (index * 20),
-        y: canvas.height / 2 + (index * 20),
+        x: docWidth / 2 + (index * 20),
+        y: docHeight / 2 + (index * 20),
         scale: Number(initialScale.toFixed(2)),
         rotation: 0
       };
@@ -447,6 +464,51 @@ addLayerInput.addEventListener('change', (e) => {
     };
     img.src = url;
   });
+});
+
+// テキストレイヤー追加機能
+document.getElementById('addTextBtn').addEventListener('click', () => {
+  const input = document.getElementById('textInput');
+  const text = input.value.trim();
+  if (!text) return;
+
+  const color = document.getElementById('textColor').value;
+
+  // 高解像度で文字を描画した画像を生成してレイヤーとして追加
+  const tCanvas = document.createElement('canvas');
+  const tCtx = tCanvas.getContext('2d');
+  const fontSize = 80;
+  tCtx.font = `bold ${fontSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+  const metrics = tCtx.measureText(text);
+
+  tCanvas.width = Math.ceil(metrics.width) + 40;
+  tCanvas.height = fontSize + 40;
+
+  tCtx.font = `bold ${fontSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+  tCtx.fillStyle = color;
+  tCtx.textAlign = 'center';
+  tCtx.textBaseline = 'middle';
+  tCtx.fillText(text, tCanvas.width / 2, tCanvas.height / 2);
+
+  const img = new Image();
+  img.onload = () => {
+    const newLayer = {
+      id: Date.now() + Math.random(),
+      name: `文字:${text.slice(0, 8)}`,
+      img: img,
+      x: docWidth / 2,
+      y: docHeight / 2,
+      scale: 0.7,
+      rotation: 0
+    };
+    layers.push(newLayer);
+    updateLayerSelectUI();
+    selectLayer(newLayer.id);
+    renderComposite();
+    switchMode('edit');
+    input.value = '';
+  };
+  img.src = tCanvas.toDataURL('image/png');
 });
 
 document.getElementById('createBgBtn').addEventListener('click', () => {
@@ -584,9 +646,17 @@ document.getElementById('clearPinBtn').addEventListener('click', () => {
   selectedPinId = null;
 });
 
+// 保存時は余白(PAD)を切り抜いた本来の画像エリアだけを書き出す
 document.getElementById('saveBtn').addEventListener('click', () => {
   renderFrame(true);
-  canvas.toBlob((blob) => {
+
+  const exportCanvas = document.createElement('canvas');
+  exportCanvas.width = docWidth;
+  exportCanvas.height = docHeight;
+  const exportCtx = exportCanvas.getContext('2d');
+  exportCtx.drawImage(canvas, PAD, PAD, docWidth, docHeight, 0, 0, docWidth, docHeight);
+
+  exportCanvas.toBlob((blob) => {
     if (!blob) {
       alert('画像の生成に失敗しました。');
       return;
