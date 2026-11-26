@@ -21,7 +21,7 @@
       <h2>1. ベース・背景の準備</h2>
       <div class="row">
         <button type="button" id="bgImageBtn" class="btn primary">ベース写真を選ぶ（比率自動）</button>
-        <input type="file" id="bgImageInput" accept="image/*">
+        <input type="file" id="bgImageInput" accept="image/png, image/jpeg, image/webp, image/*">
       </div>
       <div class="row bg-maker">
         <select id="aspectSelect">
@@ -47,7 +47,7 @@
       <h2>2. 写真・テキストを追加・編集</h2>
       <div class="row">
         <button type="button" id="addLayerBtn" class="btn primary">＋ 重ねる写真を追加</button>
-        <input type="file" id="addLayerInput" accept="image/*" multiple>
+        <input type="file" id="addLayerInput" accept="image/png, image/jpeg, image/webp, image/*" multiple>
       </div>
 
       <!-- テキスト追加エリア -->
@@ -110,7 +110,7 @@
       </div>
     </div>
 
-    <!-- キャンバス表示エリア（拡大時スクロール対応） -->
+    <!-- キャンバス表示エリア -->
     <div class="canvas-area" id="canvasArea">
       <div class="canvas-zoom-wrapper" id="canvasZoomWrapper">
         <canvas id="canvas" width="1120" height="1120"></canvas>
