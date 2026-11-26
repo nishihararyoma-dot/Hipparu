@@ -1,18 +1,18 @@
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
 
-// 合成画像を保持するオフスクリーンキャンバス
 const offCanvas = document.createElement('canvas');
 const offCtx = offCanvas.getContext('2d');
 
 // アプリの状態
 let mode = 'edit'; // 'edit' | 'pin' | 'pull'
+let hideGuides = false;
 let bgConfig = { type: 'solid', color1: '#ffffff', color2: '#a2d2ff', img: null };
-let layers = []; // { id, name, img, x, y, scale, rotation }
+let layers = [];
 let selectedLayerId = null;
 
-// 引っ張り（メッシュ＆ピン留め）用
-let pinArea = null; // { x, y, radius } 指定されている場合のみここが引っ張れる
+// 引っ張り用
+let pinArea = null;
 let pinRadius = 80;
 let stiffness = 0.16;
 const damping = 0.82;
@@ -20,9 +20,7 @@ const COLS = 28;
 const ROWS = 28;
 let points = [];
 
-// キャンバスサイズとメッシュの初期化（画像比率に合わせる）
 function resizeWorkspace(width, height) {
-  // 最大幅を600px程度に収めつつ比率を維持
   const maxDim = 600;
   let w = width;
   let h = height;
@@ -60,20 +58,17 @@ function initMesh() {
   }
 }
 
-// 背景と全レイヤーをオフスクリーンキャンバスに合成
 function renderComposite() {
   const w = offCanvas.width;
   const h = offCanvas.height;
   offCtx.clearRect(0, 0, w, h);
 
-  // 1. 背景描画
   if (bgConfig.img) {
     offCtx.drawImage(bgConfig.img, 0, 0, w, h);
   } else {
     drawGeneratedBackground(offCtx, w, h);
   }
 
-  // 2. 重ねたレイヤーを順番に描画
   for (let layer of layers) {
     offCtx.save();
     offCtx.translate(layer.x, layer.y);
@@ -85,7 +80,6 @@ function renderComposite() {
   }
 }
 
-// 背景パターンの生成描画
 function drawGeneratedBackground(context, w, h) {
   const { type, color1, color2 } = bgConfig;
   if (type === 'solid') {
@@ -121,7 +115,6 @@ function drawGeneratedBackground(context, w, h) {
   }
 }
 
-// 三角形メッシュ変形描画
 function drawTexturedTriangle(p0, p1, p2) {
   ctx.save();
   ctx.beginPath();
@@ -154,11 +147,9 @@ function drawTexturedTriangle(p0, p1, p2) {
   ctx.restore();
 }
 
-// メインアニメーションループ
-function animate(isSaving = false) {
+function renderFrame(isSaving = false) {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-  // バネ物理演算
   for (let p of points) {
     if (!p.grabbed) {
       const fx = (p.ox - p.x) * stiffness;
@@ -170,7 +161,6 @@ function animate(isSaving = false) {
     }
   }
 
-  // メッシュ描画
   for (let r = 0; r < ROWS; r++) {
     for (let c = 0; c < COLS; c++) {
       const i0 = r * (COLS + 1) + c;
@@ -183,9 +173,9 @@ function animate(isSaving = false) {
     }
   }
 
-  // 保存時以外はガイド枠を表示
-  if (!isSaving) {
-    // 編集モード時：選択中レイヤーの枠を表示
+  // 保存時ではなく、かつガイド線非表示がオフの場合のみ線を描画
+  if (!isSaving && !hideGuides) {
+    // 編集モード時の選択レイヤー枠
     if (mode === 'edit' && selectedLayerId) {
       const layer = layers.find(l => l.id === selectedLayerId);
       if (layer) {
@@ -202,27 +192,27 @@ function animate(isSaving = false) {
       }
     }
 
-    // 引っ張り指定エリアの表示（ピン留めモード or 引っ張りモード時）
-    if ((mode === 'pin' || mode === 'pull') && pinArea) {
+    // 「引っ張る場所を指定(pin)」モードの時だけ赤い円を表示（「引っ張る(pull)」時は透明になる）
+    if (mode === 'pin' && pinArea) {
       ctx.save();
       ctx.beginPath();
       ctx.arc(pinArea.x, pinArea.y, pinArea.radius, 0, Math.PI * 2);
-      ctx.strokeStyle = 'rgba(228, 30, 63, 0.8)';
+      ctx.strokeStyle = 'rgba(228, 30, 63, 0.85)';
       ctx.lineWidth = 2.5;
       ctx.setLineDash([6, 4]);
       ctx.stroke();
-      ctx.fillStyle = 'rgba(228, 30, 63, 0.1)';
+      ctx.fillStyle = 'rgba(228, 30, 63, 0.12)';
       ctx.fill();
       ctx.restore();
     }
   }
-
-  if (!isSaving) {
-    requestAnimationFrame(() => animate(false));
-  }
 }
 
-// ポインター座標取得
+function animate() {
+  renderFrame(false);
+  requestAnimationFrame(animate);
+}
+
 function getPos(e) {
   const rect = canvas.getBoundingClientRect();
   const clientX = e.touches ? e.touches[0].clientX : e.clientX;
@@ -241,7 +231,6 @@ canvas.addEventListener('pointerdown', (e) => {
   const pos = getPos(e);
 
   if (mode === 'edit') {
-    // クリックした位置にある一番上のレイヤーを選択
     for (let i = layers.length - 1; i >= 0; i--) {
       const l = layers[i];
       const hw = (l.img.width * l.scale) / 2;
@@ -253,10 +242,8 @@ canvas.addEventListener('pointerdown', (e) => {
       }
     }
   } else if (mode === 'pin') {
-    // 引っ張る場所を指定
     pinArea = { x: pos.x, y: pos.y, radius: pinRadius };
   } else if (mode === 'pull') {
-    // 指定エリアがある場合は、その円の中をクリックした時のみ反応
     if (pinArea) {
       const distToPin = Math.hypot(pos.x - pinArea.x, pos.y - pinArea.y);
       if (distToPin > pinArea.radius) return;
@@ -314,26 +301,59 @@ window.addEventListener('pointerup', () => {
   }
 });
 
-// 画像読み込みヘルパー
-function handleImageFile(input, callback) {
-  input.addEventListener('change', (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-      const img = new Image();
-      img.onload = () => callback(img, file.name);
-      img.src = ev.target.result;
-    };
-    reader.readAsDataURL(file);
-    input.value = '';
-  });
-}
+// 確実にファイル選択ダイアログを開くボタン連携
+const bgImageInput = document.getElementById('bgImageInput');
+document.getElementById('bgImageBtn').addEventListener('click', () => {
+  bgImageInput.value = '';
+  bgImageInput.click();
+});
 
-// 1. ベース写真読み込み（比率自動調整）
-handleImageFile(document.getElementById('bgImageInput'), (img) => {
-  bgConfig.img = img;
-  resizeWorkspace(img.width, img.height);
+bgImageInput.addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const url = URL.createObjectURL(file);
+  const img = new Image();
+  img.onload = () => {
+    bgConfig.img = img;
+    resizeWorkspace(img.width, img.height);
+    URL.revokeObjectURL(url);
+  };
+  img.src = url;
+});
+
+const addLayerInput = document.getElementById('addLayerInput');
+document.getElementById('addLayerBtn').addEventListener('click', () => {
+  addLayerInput.value = '';
+  addLayerInput.click();
+});
+
+addLayerInput.addEventListener('change', (e) => {
+  const files = Array.from(e.target.files);
+  if (files.length === 0) return;
+
+  files.forEach((file, index) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      const initialScale = Math.min((canvas.width * 0.5) / img.width, (canvas.height * 0.5) / img.height, 1);
+      const newLayer = {
+        id: Date.now() + index,
+        name: file.name.slice(0, 12),
+        img: img,
+        x: canvas.width / 2 + (index * 15),
+        y: canvas.height / 2 + (index * 15),
+        scale: Number(initialScale.toFixed(2)),
+        rotation: 0
+      };
+      layers.push(newLayer);
+      updateLayerSelectUI();
+      selectLayer(newLayer.id);
+      renderComposite();
+      switchMode('edit');
+      URL.revokeObjectURL(url);
+    };
+    img.src = url;
+  });
 });
 
 // 背景作成ボタン
@@ -345,25 +365,6 @@ document.getElementById('createBgBtn').addEventListener('click', () => {
   bgConfig.color1 = document.getElementById('bgColor1').value;
   bgConfig.color2 = document.getElementById('bgColor2').value;
   resizeWorkspace(aw * 150, ah * 150);
-});
-
-// 2. 重ねる写真の追加
-handleImageFile(document.getElementById('addLayerInput'), (img, name) => {
-  const initialScale = Math.min((canvas.width * 0.5) / img.width, (canvas.height * 0.5) / img.height, 1);
-  const newLayer = {
-    id: Date.now(),
-    name: name.slice(0, 12),
-    img: img,
-    x: canvas.width / 2,
-    y: canvas.height / 2,
-    scale: Number(initialScale.toFixed(2)),
-    rotation: 0
-  };
-  layers.push(newLayer);
-  updateLayerSelectUI();
-  selectLayer(newLayer.id);
-  renderComposite();
-  switchMode('edit');
 });
 
 // レイヤーUI更新
@@ -417,7 +418,6 @@ document.getElementById('layerRotate').addEventListener('input', (e) => {
   }
 });
 
-// レイヤー順序変更・削除
 document.getElementById('layerUpBtn').addEventListener('click', () => {
   const idx = layers.findIndex(l => l.id === selectedLayerId);
   if (idx >= 0 && idx < layers.length - 1) {
@@ -466,6 +466,11 @@ document.getElementById('tabEdit').addEventListener('click', () => switchMode('e
 document.getElementById('tabPin').addEventListener('click', () => switchMode('pin'));
 document.getElementById('tabPull').addEventListener('click', () => switchMode('pull'));
 
+// ガイド線非表示トグル
+document.getElementById('hideGuidesCheck').addEventListener('change', (e) => {
+  hideGuides = e.target.checked;
+});
+
 document.getElementById('pinRadiusSlider').addEventListener('input', (e) => {
   pinRadius = Number(e.target.value);
   if (pinArea) pinArea.radius = pinRadius;
@@ -479,15 +484,25 @@ document.getElementById('clearPinBtn').addEventListener('click', () => {
   pinArea = null;
 });
 
-// 保存ボタン（ガイド枠を消した状態で描画して保存）
+// 確実な画像ダウンロード処理（Blob生成）
 document.getElementById('saveBtn').addEventListener('click', () => {
-  animate(true);
-  const link = document.createElement('a');
-  link.download = 'composite-photo.png';
-  link.href = canvas.toDataURL('image/png');
-  link.click();
+  renderFrame(true); // ガイド線を消した状態で描画
+  canvas.toBlob((blob) => {
+    if (!blob) {
+      alert('画像の生成に失敗しました。');
+      return;
+    }
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `edited-photo-${Date.now()}.png`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }, 'image/png');
 });
 
 // 初期起動
 resizeWorkspace(500, 500);
-animate(false);
+animate();
