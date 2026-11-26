@@ -1,0 +1,97 @@
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: sans-serif;
+  background-color: #f4f6f8;
+  color: #333;
+  display: flex;
+  justify-content: center;
+  padding: 16px;
+}
+
+.container {
+  max-width: 440px;
+  width: 100%;
+  text-align: center;
+}
+
+h1 {
+  font-size: 1.3rem;
+  margin-bottom: 12px;
+}
+
+.controls, .mode-switch, .actions {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  margin-bottom: 10px;
+}
+
+.file-btn, button {
+  background: #4a90e2;
+  color: white;
+  border: none;
+  padding: 8px 14px;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  font-weight: bold;
+  cursor: pointer;
+}
+
+.file-btn input {
+  display: none;
+}
+
+.mode-switch button {
+  background: #dce1e7;
+  color: #333;
+}
+
+.mode-switch button.active {
+  background: #e25c4a;
+  color: white;
+}
+
+.sliders {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.85rem;
+  margin-bottom: 12px;
+  background: #fff;
+  padding: 10px;
+  border-radius: 8px;
+}
+
+.sliders label {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.canvas-wrapper {
+  background: #fff;
+  border: 2px solid #ccc;
+  border-radius: 12px;
+  overflow: hidden;
+  display: inline-block;
+  touch-action: none;
+  margin-bottom: 10px;
+}
+
+canvas {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+.save-btn {
+  background: #2ecc71;
+  width: 100%;
+  max-width: 240px;
+  padding: 10px;
+}
