@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>写真合成＆レイアウトエディタ</title>
   <link rel="apple-touch-icon" href="icon.png">
   <link rel="icon" type="image/png" href="icon.png">
@@ -72,21 +72,19 @@
       </div>
     </section>
 
-    <!-- モード切り替え -->
+    <!-- モード切り替え（指1本で画面移動モードを追加） -->
     <div class="mode-tabs">
-      <button type="button" id="tabEdit" class="tab active">✋ 配置・サイズ編集</button>
-      <button type="button" id="tabPin" class="tab">🎯 引っ張る場所を指定</button>
-      <button type="button" id="tabPull" class="tab">🤏 引っ張る（サブ）</button>
+      <button type="button" id="tabEdit" class="tab active">✋ 写真配置</button>
+      <button type="button" id="tabPan" class="tab">🖐 画面移動</button>
+      <button type="button" id="tabPin" class="tab">🎯 範囲指定</button>
+      <button type="button" id="tabPull" class="tab">🤏 引っ張る</button>
     </div>
 
-    <!-- 拡大（ズーム）＆ガイド線表示切り替え -->
+    <!-- 拡大・表示リセット＆ガイド線表示切り替え -->
     <div class="panel zoom-panel">
-      <div class="sliders" style="margin-top: 0;">
-        <label>
-          <span>🔍 画面拡大: <strong id="zoomLabel">100%</strong></span>
-          <input type="range" id="zoomSlider" min="0.5" max="2.5" step="0.1" value="1.0" style="width: 52%;">
-          <button type="button" id="resetZoomBtn" class="btn small">100%</button>
-        </label>
+      <div class="row" style="justify-content: space-between; margin-bottom: 4px;">
+        <span style="font-size: 0.85rem;">🔍 2本指で拡大縮小 / 1本指で移動（現在: <strong id="zoomLabel">100%</strong>）</span>
+        <button type="button" id="resetViewBtn" class="btn small">位置・拡大をリセット</button>
       </div>
       <div class="guide-toggle-inner">
         <label>
@@ -98,7 +96,7 @@
     <!-- サブ機能用オプション -->
     <div id="pullOptions" class="panel sub-panel hidden">
       <p style="font-size: 0.8rem; color: #666; margin-bottom: 6px;">
-        ※指定モードで画面をタップすると赤い円を追加できます（複数置くと同時に動きます）
+        ※範囲指定モードでタップすると赤い円を追加できます（複数置くと同時に動きます）
       </p>
       <div class="sliders">
         <label>選択中の円の広さ: <input type="range" id="pinRadiusSlider" min="10" max="250" value="60"></label>
@@ -110,11 +108,9 @@
       </div>
     </div>
 
-    <!-- キャンバス表示エリア -->
-    <div class="canvas-area" id="canvasArea">
-      <div class="canvas-zoom-wrapper" id="canvasZoomWrapper">
-        <canvas id="canvas" width="1120" height="1120"></canvas>
-      </div>
+    <!-- キャンバス表示エリア（ビューポート） -->
+    <div class="canvas-viewport" id="canvasViewport">
+      <canvas id="canvas"></canvas>
     </div>
 
     <!-- 保存ボタン -->
