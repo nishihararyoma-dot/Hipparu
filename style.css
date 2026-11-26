@@ -13,7 +13,6 @@ body {
   padding: 12px;
 }
 
-/* 編集エリア全体をしっかり大きく確保 */
 .app-container {
   max-width: 820px;
   width: 100%;
@@ -44,7 +43,16 @@ header h1 {
   flex-wrap: wrap;
   gap: 8px;
   align-items: center;
-  margin-bottom: 6px;
+  margin-bottom: 8px;
+}
+
+.text-input {
+  flex: 1;
+  min-width: 150px;
+  padding: 8px 10px;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  font-size: 0.9rem;
 }
 
 .btn {
@@ -167,17 +175,17 @@ input[type="color"] {
   display: none !important;
 }
 
-/* キャンバスを大きく見やすく表示 */
+/* キャンバス外まで引っ張っても途切れないように余白を持たせた表示エリア */
 .canvas-area {
-  background: #d0d4da;
+  background: #cfd4dc;
   border-radius: 12px;
-  padding: 12px;
+  padding: 6px;
   display: flex;
   justify-content: center;
   align-items: center;
   margin-bottom: 14px;
   touch-action: none;
-  min-height: 420px;
+  overflow: hidden;
 }
 
 canvas {
@@ -185,6 +193,5 @@ canvas {
   height: auto;
   max-height: 75vh;
   object-fit: contain;
-  background: #fff;
-  box-shadow: 0 4px 12px rgba(0,0,0,0.18);
+  background: transparent;
 }
