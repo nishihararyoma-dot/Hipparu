@@ -12,8 +12,9 @@
 </head>
 <body>
   <div class="app-container">
-    <header>
-      <h1>写真合成＆レイアウトエディタ</h1>
+    <header style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+      <h1 style="margin-bottom: 0;">写真合成＆レイアウトエディタ</h1>
+      <button type="button" id="undoBtn" class="btn primary" disabled>↩️ 1つ戻る (0)</button>
     </header>
 
     <!-- 1. ベース・背景の準備 -->
@@ -31,7 +32,8 @@
           <option value="9:16">9:16 (スマホ縦)</option>
         </select>
         <select id="bgTypeSelect">
-          <option value="solid">単色背景</option>
+          <option value="transparent">🔲 透明（背景透過PNG）</option>
+          <option value="solid" selected>単色背景</option>
           <option value="gradient">グラデーション</option>
           <option value="rainbow">🌈 虹色（レインボー）</option>
           <option value="dots">ドット柄</option>
@@ -73,8 +75,14 @@
         </div>
         <div class="row">
           <button type="button" id="cropModeBtn" class="btn small accent">✂️ 好きな形に切る</button>
-          <button type="button" id="resetCropBtn" class="btn small">切り抜きを戻す</button>
+          <button type="button" id="resetCropBtn" class="btn small">切り抜き・透過を戻す</button>
           <button type="button" id="flipHBtn" class="btn small">↔️ 左右反転</button>
+        </div>
+        <div class="row" style="background: #f8f9fa; padding: 6px; border-radius: 6px;">
+          <span style="font-size: 0.8rem; font-weight: bold;">色透過:</span>
+          <input type="color" id="chromaColor" value="#ffffff" title="透明にしたい色">
+          <button type="button" id="pickTransparentBtn" class="btn small">👆 タップした色を透明に</button>
+          <button type="button" id="applyChromaBtn" class="btn small primary">指定色を透明化</button>
         </div>
         <div class="row">
           <button type="button" id="invertLayerBtn" class="btn small primary">🌓 この写真の色を反転</button>
@@ -89,9 +97,9 @@
       </div>
     </section>
 
-    <!-- 切り抜きモード中の案内パネル -->
+    <!-- 切り抜き／スポイトモード中の案内パネル -->
     <div id="cropNoticePanel" class="panel notice-panel hidden">
-      <p style="font-size: 0.85rem; font-weight: bold; color: #d97706;">
+      <p id="noticeText" style="font-size: 0.85rem; font-weight: bold; color: #d97706;">
         ✂️ 切り抜き中：残したい部分を指でなぞって囲んでください（指を離すと切り抜かれます）
       </p>
       <button type="button" id="cancelCropBtn" class="btn small" style="margin-top: 6px;">キャンセル</button>
