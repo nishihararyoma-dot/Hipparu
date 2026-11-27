@@ -68,15 +68,23 @@
           <select id="layerSelect"></select>
           <button type="button" id="layerUpBtn" class="btn small">前面へ</button>
           <button type="button" id="layerDownBtn" class="btn small">背面へ</button>
+          <button type="button" id="layerDupBtn" class="btn small">複製</button>
           <button type="button" id="layerDeleteBtn" class="btn small danger">削除</button>
         </div>
         <div class="row">
           <button type="button" id="cropModeBtn" class="btn small accent">✂️ 好きな形に切る</button>
           <button type="button" id="resetCropBtn" class="btn small">切り抜きを戻す</button>
+          <button type="button" id="flipHBtn" class="btn small">↔️ 左右反転</button>
+        </div>
+        <div class="row">
+          <button type="button" id="invertLayerBtn" class="btn small primary">🌓 この写真の色を反転</button>
+          <button type="button" id="grayLayerBtn" class="btn small">🎞 白黒にする</button>
+          <button type="button" id="resetFilterBtn" class="btn small">色を元に戻す</button>
         </div>
         <div class="sliders">
           <label>大きさ: <input type="range" id="layerScale" min="0.05" max="3.0" step="0.02" value="0.5"></label>
           <label>回転: <input type="range" id="layerRotate" min="-180" max="180" step="1" value="0"></label>
+          <label>透明度（透け感）: <input type="range" id="layerAlpha" min="0.05" max="1.0" step="0.05" value="1.0"></label>
         </div>
       </div>
     </section>
@@ -97,13 +105,16 @@
       <button type="button" id="tabPull" class="tab">🤏 引っ張る</button>
     </div>
 
-    <!-- 拡大・表示リセット＆ガイド線表示切り替え -->
+    <!-- 拡大・表示リセット＆全体エフェクト・ガイド線表示切り替え -->
     <div class="panel zoom-panel">
       <div class="row" style="justify-content: space-between; margin-bottom: 4px;">
         <span style="font-size: 0.85rem;">🔍 2本指で拡大縮小 / 1本指で移動（現在: <strong id="zoomLabel">100%</strong>）</span>
         <button type="button" id="resetViewBtn" class="btn small">位置・拡大をリセット</button>
       </div>
-      <div class="guide-toggle-inner">
+      <div class="guide-toggle-inner" style="display: flex; flex-direction: column; gap: 6px;">
+        <label>
+          <input type="checkbox" id="globalInvertCheck"> 🌓 画面全体の色を反転する（背景もまとめて反転）
+        </label>
         <label>
           <input type="checkbox" id="hideGuidesCheck"> ガイド線（青枠・赤丸・外枠）をすべて非表示にする
         </label>
@@ -121,7 +132,6 @@
         </label>
       </div>
 
-      <!-- 戻り方のプリセットボタン -->
       <div class="row" style="margin-bottom: 6px;">
         <span style="font-size: 0.85rem; font-weight: bold;">戻り方:</span>
         <button type="button" id="presetRubberBtn" class="btn small primary">⚡ 輪ゴム（パチン！）</button>
