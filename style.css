@@ -38,6 +38,11 @@ header h1 {
   color: #555;
 }
 
+.notice-panel {
+  background: #fef3c7;
+  border: 1px solid #f59e0b;
+}
+
 .row {
   display: flex;
   flex-wrap: wrap;
@@ -66,6 +71,7 @@ header h1 {
   cursor: pointer;
   display: inline-block;
   user-select: none;
+  text-align: center;
 }
 
 .btn:active {
@@ -74,6 +80,11 @@ header h1 {
 
 .btn.primary {
   background: #1877f2;
+  color: #fff;
+}
+
+.btn.accent {
+  background: #f59e0b;
   color: #fff;
 }
 
@@ -95,8 +106,14 @@ header h1 {
   font-size: 1.05rem;
 }
 
-input[type="file"] {
-  display: none;
+/* Safariで確実にタップ反応させるため display:none ではなく画面外配置で隠す */
+.hidden-file-input {
+  position: fixed;
+  top: -100px;
+  left: -100px;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
 }
 
 select, input[type="color"] {
@@ -127,7 +144,7 @@ input[type="color"] {
 }
 
 .sliders input[type="range"] {
-  width: 68%;
+  width: 62%;
 }
 
 .mode-tabs {
@@ -171,7 +188,6 @@ input[type="color"] {
   display: none !important;
 }
 
-/* カメラ方式のビューポート：はみ出さず、拡大時も上下左右どこへでも移動可能 */
 .canvas-viewport {
   width: 100%;
   height: 62vh;
