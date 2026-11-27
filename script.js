@@ -19,7 +19,7 @@ let hideGuides = false;
 let freezePull = false;
 let syncPins = true;
 let fingerRadius = 90;
-let roundness = 0.75; // 円の塊感（高いほど円全体が丸ごと伸びる）
+let roundness = 0.75;
 
 let bgConfig = { type: 'solid', color1: '#ffffff', color2: '#a2d2ff', img: null };
 let layers = [];
@@ -30,17 +30,15 @@ let cropPoints = [];
 let pinAreas = [];
 let selectedPinId = null;
 
-// 独立した「戻るスピード」と「揺れの回数」
-let returnSpeed = 0.80; // 0.1〜1.0（速さ）
-let bounceAmount = 0.25; // 0.0〜0.90（跳ね返り・揺れ残り）
+let returnSpeed = 0.80;
+let bounceAmount = 0.25;
 
 const COLS = 28;
 const ROWS = 28;
 let points = [];
 let isDeformed = false;
 
-// 引っ張り中の視覚ガイド用
-let activePullCircle = null; // { x, y, radius }
+let activePullCircle = null;
 
 function syncViewportSize() {
   const rect = viewport.getBoundingClientRect();
@@ -110,11 +108,9 @@ function initMesh() {
   isDeformed = false;
 }
 
-// 円の塊感を計算する関数（内側が丸ごとついてくるドームカーブ）
 function calcCircleInfluence(dist, radius) {
   if (dist >= radius) return 0;
-  const norm = dist / radius; // 0(中心) 〜 1(フチ)
-  // roundnessが高いほど、中心付近が平らに1.0を保ち、フチ近くで滑らかに0へ落ちる
+  const norm = dist / radius;
   const flatZone = roundness * 0.75;
   if (norm <= flatZone) {
     return 1.0;
@@ -282,29 +278,29 @@ function drawDeformedMesh(targetCtx) {
 function renderFrame() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-  // 「戻るスピード」と「揺れの回数」を完全に独立させた物理演算
+  // 4分割サブステップ物理演算（最大スピードでも絶対に暴走・加速しない安定版）
   if (isDeformed) {
     let anyDeformed = false;
-    // returnSpeed (0.1〜1.0) から固有角振動数 omega を決定（最大で1〜2フレームで到達する超高速スナップ）
-    const omega = 0.22 + returnSpeed * 1.15;
-    // bounceAmount (0.0〜0.9) から減衰比 zeta を決定（0なら揺れゼロでピタッと止まり、0.9なら長く揺れる）
-    const zeta = 1.0 - bounceAmount * 0.92;
+    const subSteps = 4;
+    const dt = 1 / subSteps;
+    const omega = 0.25 + returnSpeed * 1.45;
+    const zeta = 1.0 - bounceAmount * 0.90;
 
     for (let p of points) {
       if (!p.grabbed && !freezePull) {
-        const dx = p.ox - p.x;
-        const dy = p.oy - p.y;
+        for (let s = 0; s < subSteps; s++) {
+          const dx = p.ox - p.x;
+          const dy = p.oy - p.y;
 
-        // 減衰振動の正確な離散ステップ（スピードと揺れが干渉しない）
-        const ax = omega * omega * dx - 2 * zeta * omega * p.vx;
-        const ay = omega * omega * dy - 2 * zeta * omega * p.vy;
+          const ax = omega * omega * dx - 2 * zeta * omega * p.vx;
+          const ay = omega * omega * dy - 2 * zeta * omega * p.vy;
 
-        p.vx += ax;
-        p.vy += ay;
-        p.x += p.vx;
-        p.y += p.vy;
+          p.vx += ax * dt;
+          p.vy += ay * dt;
+          p.x += p.vx * dt;
+          p.y += p.vy * dt;
+        }
 
-        // 振動がオーバーシュートして暴れないよう安全リミット
         if (Math.abs(p.ox - p.x) < 0.25 && Math.abs(p.oy - p.y) < 0.25 && Math.abs(p.vx) < 0.25 && Math.abs(p.vy) < 0.25) {
           p.x = p.ox;
           p.y = p.oy;
@@ -372,7 +368,6 @@ function renderFrame() {
       }
     }
 
-    // 範囲指定モード、または引っ張りモードでも赤い円を薄く表示して掴みやすくする
     if ((mode === 'pin' || mode === 'pull') && pinAreas.length > 0) {
       pinAreas.forEach((pin, index) => {
         const isSelected = pin.id === selectedPinId;
@@ -398,7 +393,6 @@ function renderFrame() {
       });
     }
 
-    // 引っ張っている最中の「掴んでいる円」の視覚ガイド
     if (mode === 'pull' && activePullCircle) {
       ctx.save();
       ctx.beginPath();
@@ -578,7 +572,6 @@ canvas.addEventListener('pointerdown', (e) => {
       for (let p of points) {
         let maxInf = 0;
         for (let pin of targetPins) {
-          // すでに変形している頂点(p.x, p.y)と元の座標(p.ox, p.oy)の近い方で判定し、丸ごと掴む
           const distOrig = Math.hypot(p.ox - pin.x, p.oy - pin.y);
           const distCurr = Math.hypot(p.x - pin.x, p.y - pin.y);
           const dist = Math.min(distOrig, distCurr);
