@@ -14,14 +14,18 @@ let view = {
   y: 0
 };
 
-let mode = 'edit'; // 'edit' | 'pan' | 'pin' | 'pull'
+let mode = 'edit'; // 'edit' | 'pan' | 'pin' | 'pull' | 'crop'
 let hideGuides = false;
-let freezePull = false; // 引っ張った状態で止めるかどうか
-let syncPins = true;    // 赤い円をすべて同時に動かすかどうか
+let freezePull = false;
+let syncPins = true;
+let fingerRadius = 80; // 引っ張る指の大きさ
 
 let bgConfig = { type: 'solid', color1: '#ffffff', color2: '#a2d2ff', img: null };
-let layers = [];
+let layers = []; // { id, name, img, originalImg, x, y, scale, rotation }
 let selectedLayerId = null;
+
+// 切り抜きパス保持用
+let cropPoints = [];
 
 let pinAreas = [];
 let selectedPinId = null;
@@ -217,7 +221,6 @@ function drawTexturedTriangle(targetCtx, p0, p1, p2) {
   targetCtx.restore();
 }
 
-// 現在の変形状態を指定のコンテキストに描画する共通関数（表示用と保存用で共用）
 function drawDeformedMesh(targetCtx) {
   const triangles = [];
   for (let r = 0; r < ROWS; r++) {
@@ -260,7 +263,6 @@ function drawDeformedMesh(targetCtx) {
 function renderFrame() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-  // 変形中かつフリーズ（固定）がオフの時だけバネで元に戻る計算をする
   if (isDeformed) {
     let anyDeformed = false;
     for (let p of points) {
@@ -301,13 +303,31 @@ function renderFrame() {
     drawDeformedMesh(ctx);
   }
 
+  // 切り抜き（フリーハンド）中の線を描画
+  if (mode === 'crop' && cropPoints.length > 0) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(cropPoints[0].x, cropPoints[0].y);
+    for (let i = 1; i < cropPoints.length; i++) {
+      ctx.lineTo(cropPoints[i].x, cropPoints[i].y);
+    }
+    ctx.closePath();
+    ctx.strokeStyle = '#f59e0b';
+    ctx.lineWidth = 3 / view.scale;
+    ctx.setLineDash([6 / view.scale, 4 / view.scale]);
+    ctx.stroke();
+    ctx.fillStyle = 'rgba(245, 158, 11, 0.25)';
+    ctx.fill();
+    ctx.restore();
+  }
+
   // ガイド線の描画
   if (!hideGuides) {
     ctx.strokeStyle = 'rgba(0, 0, 0, 0.25)';
     ctx.lineWidth = 2 / view.scale;
     ctx.strokeRect(0, 0, docWidth, docHeight);
 
-    if (mode === 'edit' && selectedLayerId) {
+    if ((mode === 'edit' || mode === 'crop') && selectedLayerId) {
       const layer = layers.find(l => l.id === selectedLayerId);
       if (layer) {
         ctx.save();
@@ -315,7 +335,7 @@ function renderFrame() {
         ctx.rotate((layer.rotation * Math.PI) / 180);
         const lw = layer.img.width * layer.scale;
         const lh = layer.img.height * layer.scale;
-        ctx.strokeStyle = '#1877f2';
+        ctx.strokeStyle = mode === 'crop' ? '#f59e0b' : '#1877f2';
         ctx.lineWidth = 2.5 / view.scale;
         ctx.setLineDash([8 / view.scale, 8 / view.scale]);
         ctx.strokeRect(-lw / 2, -lh / 2, lw, lh);
@@ -366,6 +386,50 @@ function screenToDoc(clientX, clientY) {
   };
 }
 
+// 自由な形でレイヤー画像を切り抜く処理
+function applyFreehandCrop(layer, docPoints) {
+  if (docPoints.length < 3) return;
+
+  const cropCanvas = document.createElement('canvas');
+  cropCanvas.width = layer.img.width;
+  cropCanvas.height = layer.img.height;
+  const cCtx = cropCanvas.getContext('2d');
+
+  // ドキュメント座標をレイヤーのローカル座標（回転・スケール・中心位置を逆算）に変換
+  const rad = (-layer.rotation * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+
+  cCtx.save();
+  cCtx.beginPath();
+  docPoints.forEach((pt, idx) => {
+    const dx = pt.x - layer.x;
+    const dy = pt.y - layer.y;
+    const rx = (dx * cos - dy * sin) / layer.scale + layer.img.width / 2;
+    const ry = (dx * sin + dy * cos) / layer.scale + layer.img.height / 2;
+    if (idx === 0) cCtx.moveTo(rx, ry);
+    else cCtx.lineTo(rx, ry);
+  });
+  cCtx.closePath();
+  cCtx.clip();
+  cCtx.drawImage(layer.img, 0, 0);
+  cCtx.restore();
+
+  const croppedImg = new Image();
+  croppedImg.onload = () => {
+    layer.img = croppedImg;
+    renderComposite();
+    exitCropMode();
+  };
+  croppedImg.src = cropCanvas.toDataURL('image/png');
+}
+
+function exitCropMode() {
+  cropPoints = [];
+  document.getElementById('cropNoticePanel').classList.add('hidden');
+  switchMode('edit');
+}
+
 let activePointers = new Map();
 let lastPinchDist = null;
 let lastPinchCenter = null;
@@ -391,6 +455,12 @@ canvas.addEventListener('pointerdown', (e) => {
   }
 
   const pos = screenToDoc(e.clientX, e.clientY);
+
+  if (mode === 'crop') {
+    singleAction = 'crop';
+    cropPoints = [{ x: pos.x, y: pos.y }];
+    return;
+  }
 
   if (mode === 'pan') {
     singleAction = 'pan';
@@ -440,7 +510,6 @@ canvas.addEventListener('pointerdown', (e) => {
     pullDragStart = { x: pos.x, y: pos.y };
 
     if (pinAreas.length > 0) {
-      // タッチした位置にある赤い円を探す（上から順に判定）
       let hitPin = null;
       for (let i = pinAreas.length - 1; i >= 0; i--) {
         if (Math.hypot(pos.x - pinAreas[i].x, pos.y - pinAreas[i].y) <= pinAreas[i].radius) {
@@ -456,13 +525,14 @@ canvas.addEventListener('pointerdown', (e) => {
       }
 
       isDeformed = true;
-      // 「すべて同時(syncPins)」なら全円、オフなら「タッチした円(hitPin)1個だけ」を対象にする
       const targetPins = syncPins ? pinAreas : [hitPin];
 
       for (let p of points) {
         let maxInf = 0;
         for (let pin of targetPins) {
           const dist = Math.hypot(p.ox - pin.x, p.oy - pin.y);
+          // 赤い円の広さと「引っ張る指の大きさ」の両方を考慮
+          const effectiveRadius = Math.min(pin.radius, fingerRadius * 1.5);
           if (dist < pin.radius) {
             const inf = Math.cos((dist / pin.radius) * (Math.PI / 2));
             if (inf > maxInf) maxInf = inf;
@@ -476,13 +546,13 @@ canvas.addEventListener('pointerdown', (e) => {
         }
       }
     } else {
+      // 赤い円がない場合は「引っ張る指の大きさ(fingerRadius)」をそのまま範囲にする
       isDeformed = true;
-      const activeRadius = Number(document.getElementById('pinRadiusSlider').value);
       for (let p of points) {
         const dist = Math.hypot(p.ox - pos.x, p.oy - pos.y);
-        if (dist < activeRadius) {
+        if (dist < fingerRadius) {
           p.grabbed = true;
-          p.influence = Math.cos((dist / activeRadius) * (Math.PI / 2));
+          p.influence = Math.cos((dist / fingerRadius) * (Math.PI / 2));
           p.startX = p.x;
           p.startY = p.y;
         }
@@ -522,7 +592,9 @@ canvas.addEventListener('pointermove', (e) => {
 
   const pos = screenToDoc(e.clientX, e.clientY);
 
-  if (singleAction === 'pan') {
+  if (singleAction === 'crop') {
+    cropPoints.push({ x: pos.x, y: pos.y });
+  } else if (singleAction === 'pan') {
     view.x = pos.sx - dragOffset.x;
     view.y = pos.sy - dragOffset.y;
   } else if (singleAction === 'layer' && selectedLayerId) {
@@ -559,6 +631,14 @@ function handlePointerEnd(e) {
     lastPinchCenter = null;
   }
   if (activePointers.size === 0) {
+    if (singleAction === 'crop' && selectedLayerId) {
+      const layer = layers.find(l => l.id === selectedLayerId);
+      if (layer && cropPoints.length > 5) {
+        applyFreehandCrop(layer, cropPoints);
+      } else {
+        exitCropMode();
+      }
+    }
     singleAction = null;
     for (let p of points) {
       p.grabbed = false;
@@ -586,18 +666,18 @@ canvas.addEventListener('wheel', (e) => {
 
 document.getElementById('resetViewBtn').addEventListener('click', resetView);
 
-// 画像読み込み
-function loadSafeImage(file, buttonElement, originalText, callback) {
+// Safariで100%確実に画像を開くための新しい軽量読み込み関数
+async function processImageFile(file, buttonElement, originalText, callback) {
   if (!file) return;
   if (buttonElement) buttonElement.textContent = '読み込み中...';
 
-  const reader = new FileReader();
-  reader.onload = (event) => {
-    const rawImg = new Image();
-    rawImg.onload = () => {
+  try {
+    // createImageBitmap が使える場合はメモリを圧迫せず高速にデコード＆リサイズ
+    if (window.createImageBitmap) {
+      const bitmap = await createImageBitmap(file);
       const maxLoadSize = 900;
-      let w = rawImg.width;
-      let h = rawImg.height;
+      let w = bitmap.width;
+      let h = bitmap.height;
 
       if (w > maxLoadSize || h > maxLoadSize) {
         if (w >= h) {
@@ -613,70 +693,88 @@ function loadSafeImage(file, buttonElement, originalText, callback) {
       tempCanvas.width = w;
       tempCanvas.height = h;
       const tempCtx = tempCanvas.getContext('2d');
-      tempCtx.drawImage(rawImg, 0, 0, w, h);
+      tempCtx.drawImage(bitmap, 0, 0, w, h);
+      bitmap.close();
 
-      const optimizedImg = new Image();
-      optimizedImg.onload = () => {
+      const img = new Image();
+      img.onload = () => {
         if (buttonElement) buttonElement.textContent = originalText;
-        callback(optimizedImg);
+        callback(img);
       };
-      optimizedImg.onerror = () => {
-        if (buttonElement) buttonElement.textContent = originalText;
-        alert('画像の変換に失敗しました。別の画像をお試しください。');
-      };
-      optimizedImg.src = tempCanvas.toDataURL('image/png');
-    };
+      img.src = tempCanvas.toDataURL('image/png');
+      return;
+    }
+  } catch (err) {
+    // フォールバック処理へ進む
+  }
 
-    rawImg.onerror = () => {
+  // フォールバック：ObjectURLで直接読み込み
+  const url = URL.createObjectURL(file);
+  const rawImg = new Image();
+  rawImg.onload = () => {
+    const maxLoadSize = 900;
+    let w = rawImg.width;
+    let h = rawImg.height;
+
+    if (w > maxLoadSize || h > maxLoadSize) {
+      if (w >= h) {
+        h = Math.round((h / w) * maxLoadSize);
+        w = maxLoadSize;
+      } else {
+        w = Math.round((w / h) * maxLoadSize);
+        h = maxLoadSize;
+      }
+    }
+
+    const tempCanvas = document.createElement('canvas');
+    tempCanvas.width = w;
+    tempCanvas.height = h;
+    const tempCtx = tempCanvas.getContext('2d');
+    tempCtx.drawImage(rawImg, 0, 0, w, h);
+    URL.revokeObjectURL(url);
+
+    const img = new Image();
+    img.onload = () => {
       if (buttonElement) buttonElement.textContent = originalText;
-      alert('画像の読み込みに失敗しました。');
+      callback(img);
     };
-    rawImg.src = event.target.result;
+    img.src = tempCanvas.toDataURL('image/png');
   };
-
-  reader.onerror = () => {
+  rawImg.onerror = () => {
+    URL.revokeObjectURL(url);
     if (buttonElement) buttonElement.textContent = originalText;
-    alert('ファイルの取得に失敗しました。');
+    alert('画像の読み込みに失敗しました。別の画像を選んでみてください。');
   };
-
-  reader.readAsDataURL(file);
+  rawImg.src = url;
 }
 
 const bgImageInput = document.getElementById('bgImageInput');
 const bgImageBtn = document.getElementById('bgImageBtn');
 
-bgImageBtn.addEventListener('click', () => {
-  bgImageInput.value = '';
-  bgImageInput.click();
-});
-
 bgImageInput.addEventListener('change', (e) => {
   const file = e.target.files[0];
-  loadSafeImage(file, bgImageBtn, 'ベース写真を選ぶ（比率自動）', (img) => {
+  processImageFile(file, bgImageBtn, 'ベース写真を選ぶ（比率自動）', (img) => {
     bgConfig.img = img;
     resizeWorkspace(img.width, img.height);
+    bgImageInput.value = '';
   });
 });
 
 const addLayerInput = document.getElementById('addLayerInput');
 const addLayerBtn = document.getElementById('addLayerBtn');
 
-addLayerBtn.addEventListener('click', () => {
-  addLayerInput.value = '';
-  addLayerInput.click();
-});
-
 addLayerInput.addEventListener('change', (e) => {
   const files = Array.from(e.target.files);
   if (files.length === 0) return;
 
   files.forEach((file, index) => {
-    loadSafeImage(file, addLayerBtn, '＋ 重ねる写真を追加', (img) => {
+    processImageFile(file, addLayerBtn, '＋ 重ねる写真を追加', (img) => {
       const initialScale = Math.min((docWidth * 0.45) / img.width, (docHeight * 0.45) / img.height, 1.5);
       const newLayer = {
         id: Date.now() + index + Math.random(),
         name: file.name.slice(0, 12),
         img: img,
+        originalImg: img,
         x: docWidth / 2 + (index * 20),
         y: docHeight / 2 + (index * 20),
         scale: Number(initialScale.toFixed(2)),
@@ -689,6 +787,7 @@ addLayerInput.addEventListener('change', (e) => {
       switchMode('edit');
     });
   });
+  addLayerInput.value = '';
 });
 
 // テキスト追加（虹色対応）
@@ -735,6 +834,7 @@ document.getElementById('addTextBtn').addEventListener('click', () => {
       id: Date.now() + Math.random(),
       name: `文字:${text.slice(0, 8)}`,
       img: img,
+      originalImg: img,
       x: docWidth / 2,
       y: docHeight / 2,
       scale: 0.7,
@@ -810,6 +910,26 @@ document.getElementById('layerRotate').addEventListener('input', (e) => {
   }
 });
 
+// 好きな形に切るボタン＆戻すボタン
+document.getElementById('cropModeBtn').addEventListener('click', () => {
+  if (!selectedLayerId) return;
+  mode = 'crop';
+  cropPoints = [];
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.getElementById('pullOptions').classList.add('hidden');
+  document.getElementById('cropNoticePanel').classList.remove('hidden');
+});
+
+document.getElementById('cancelCropBtn').addEventListener('click', exitCropMode);
+
+document.getElementById('resetCropBtn').addEventListener('click', () => {
+  const layer = layers.find(l => l.id === selectedLayerId);
+  if (layer && layer.originalImg) {
+    layer.img = layer.originalImg;
+    renderComposite();
+  }
+});
+
 document.getElementById('layerUpBtn').addEventListener('click', () => {
   const idx = layers.findIndex(l => l.id === selectedLayerId);
   if (idx >= 0 && idx < layers.length - 1) {
@@ -841,6 +961,7 @@ function switchMode(newMode) {
   mode = newMode;
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
   document.getElementById('pullOptions').classList.add('hidden');
+  document.getElementById('cropNoticePanel').classList.add('hidden');
 
   if (mode === 'edit') {
     document.getElementById('tabEdit').classList.add('active');
@@ -872,6 +993,10 @@ document.getElementById('syncPinsCheck').addEventListener('change', (e) => {
   syncPins = e.target.checked;
 });
 
+document.getElementById('fingerRadiusSlider').addEventListener('input', (e) => {
+  fingerRadius = Number(e.target.value);
+});
+
 document.getElementById('pinRadiusSlider').addEventListener('input', (e) => {
   const newRadius = Number(e.target.value);
   if (selectedPinId) {
@@ -900,7 +1025,6 @@ document.getElementById('clearPinBtn').addEventListener('click', () => {
   selectedPinId = null;
 });
 
-// 今の変形状態（引っ張って止めた形、または戻り途中の形）をそのまま保存する
 document.getElementById('saveBtn').addEventListener('click', () => {
   const exportCanvas = document.createElement('canvas');
   exportCanvas.width = docWidth;
