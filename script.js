@@ -31,7 +31,7 @@ let cropPoints = [];
 let pinAreas = [];
 let selectedPinId = null;
 
-let returnSpeed = 0.80;
+let returnSpeed = 0.75;
 let bounceAmount = 0.25;
 
 const COLS = 28;
@@ -40,6 +40,7 @@ let points = [];
 let isDeformed = false;
 
 let activePullCircle = null;
+let lastFrameTime = performance.now();
 
 function syncViewportSize() {
   const rect = viewport.getBoundingClientRect();
@@ -120,7 +121,6 @@ function calcCircleInfluence(dist, radius) {
   return 0.5 * (1 + Math.cos(edgeNorm * Math.PI));
 }
 
-// ピクセル単位の確実な色反転・白黒処理（Safariでも100%動作＆保存反映）
 function applyPixelEffectToImage(sourceImg, type, callback) {
   const c = document.createElement('canvas');
   c.width = sourceImg.width;
@@ -132,7 +132,7 @@ function applyPixelEffectToImage(sourceImg, type, callback) {
   const data = imgData.data;
 
   for (let i = 0; i < data.length; i += 4) {
-    if (data[i + 3] === 0) continue; // 透明部分はスキップ
+    if (data[i + 3] === 0) continue;
     if (type === 'invert') {
       data[i] = 255 - data[i];
       data[i + 1] = 255 - data[i + 1];
@@ -176,7 +176,6 @@ function renderComposite() {
     offCtx.restore();
   }
 
-  // 全体の色反転がオンの場合、ピクセル単位で確実に反転（保存時にもそのまま反映される）
   if (globalInvert) {
     const imgData = offCtx.getImageData(0, 0, w, h);
     const data = imgData.data;
@@ -323,14 +322,21 @@ function drawDeformedMesh(targetCtx) {
   }
 }
 
-function renderFrame() {
+function renderFrame(now) {
+  const currentNow = now || performance.now();
+  // スマホの120Hz画面でもPCの60Hz画面でも同じ速さになるよう経過時間で正規化
+  const elapsedMs = Math.min(currentNow - lastFrameTime, 50);
+  lastFrameTime = currentNow;
+  const timeScale = elapsedMs / (1000 / 60);
+
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
   if (isDeformed) {
     let anyDeformed = false;
     const subSteps = 4;
-    const dt = 1 / subSteps;
-    const omega = 0.25 + returnSpeed * 1.45;
+    const dt = timeScale / subSteps;
+    // 下限を大幅に拡張（returnSpeed=0.01で超スローモーション、1.0で超高速パチン）
+    const omega = 0.018 + Math.pow(returnSpeed, 1.35) * 1.55;
     const zeta = 1.0 - bounceAmount * 0.90;
 
     for (let p of points) {
@@ -456,8 +462,8 @@ function renderFrame() {
   ctx.restore();
 }
 
-function animate() {
-  renderFrame();
+function animate(now) {
+  renderFrame(now);
   requestAnimationFrame(animate);
 }
 
@@ -1176,8 +1182,15 @@ document.getElementById('presetRubberBtn').addEventListener('click', () => {
 });
 
 document.getElementById('presetSlimeBtn').addEventListener('click', () => {
-  returnSpeed = 0.20;
+  returnSpeed = 0.22;
   bounceAmount = 0.80;
+  springSlider.value = returnSpeed;
+  bounceSlider.value = bounceAmount;
+});
+
+document.getElementById('presetSlowBtn').addEventListener('click', () => {
+  returnSpeed = 0.04;
+  bounceAmount = 0.15;
   springSlider.value = returnSpeed;
   bounceSlider.value = bounceAmount;
 });
@@ -1256,4 +1269,4 @@ window.addEventListener('resize', () => {
 
 // 初期起動
 resizeWorkspace(800, 800);
-animate();
+requestAnimationFrame(animate);
