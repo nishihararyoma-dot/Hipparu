@@ -14,7 +14,7 @@ let view = {
   y: 0
 };
 
-let mode = 'edit';
+let mode = 'edit'; // 'edit' | 'pan' | 'pin' | 'pull' | 'crop'
 let hideGuides = false;
 let freezePull = false;
 let syncPins = true;
@@ -28,8 +28,8 @@ let cropPoints = [];
 
 let pinAreas = [];
 let selectedPinId = null;
-let stiffness = 0.16;
-const damping = 0.82;
+let stiffness = 0.55;
+let damping = 0.58;
 const COLS = 24;
 const ROWS = 24;
 let points = [];
@@ -658,10 +658,8 @@ canvas.addEventListener('wheel', (e) => {
 
 document.getElementById('resetViewBtn').addEventListener('click', resetView);
 
-// 画像・Blobから確実にリサイズ済みImageを生成する共通関数
-function loadBlobAsResizedImage(blob, buttonElement, originalText, callback) {
+function loadBlobAsResizedImage(blob, callback) {
   if (!blob) return;
-  if (buttonElement) buttonElement.textContent = '読み込み中...';
 
   const url = URL.createObjectURL(blob);
   const rawImg = new Image();
@@ -689,18 +687,15 @@ function loadBlobAsResizedImage(blob, buttonElement, originalText, callback) {
 
     const img = new Image();
     img.onload = () => {
-      if (buttonElement) buttonElement.textContent = originalText;
       callback(img);
     };
     img.onerror = () => {
-      if (buttonElement) buttonElement.textContent = originalText;
       alert('画像の変換に失敗しました。');
     };
     img.src = tempCanvas.toDataURL('image/png');
   };
   rawImg.onerror = () => {
     URL.revokeObjectURL(url);
-    if (buttonElement) buttonElement.textContent = originalText;
     alert('画像の読み込みに失敗しました。');
   };
   rawImg.src = url;
@@ -726,12 +721,10 @@ function addImageLayer(img, nameText) {
 }
 
 const bgImageInput = document.getElementById('bgImageInput');
-const bgImageBtn = document.getElementById('bgImageBtn');
-
 bgImageInput.addEventListener('change', (e) => {
   const file = e.target.files && e.target.files[0];
   if (!file) return;
-  loadBlobAsResizedImage(file, bgImageBtn, 'ベース写真を選ぶ（比率自動）', (img) => {
+  loadBlobAsResizedImage(file, (img) => {
     bgConfig.img = img;
     resizeWorkspace(img.width, img.height);
     bgImageInput.value = '';
@@ -739,19 +732,16 @@ bgImageInput.addEventListener('change', (e) => {
 });
 
 const addLayerInput = document.getElementById('addLayerInput');
-const addLayerBtn = document.getElementById('addLayerBtn');
-
 addLayerInput.addEventListener('change', (e) => {
   const file = e.target.files && e.target.files[0];
   if (!file) return;
   const labelName = file.name ? file.name.slice(0, 12) : '写真';
-  loadBlobAsResizedImage(file, addLayerBtn, '＋ 重ねる写真を追加', (img) => {
+  loadBlobAsResizedImage(file, (img) => {
     addImageLayer(img, labelName);
     addLayerInput.value = '';
   });
 });
 
-// クリップボードから画像を貼り付ける機能（ボタン＆ペーストイベント両対応）
 document.getElementById('pasteImgBtn').addEventListener('click', async () => {
   try {
     const items = await navigator.clipboard.read();
@@ -759,15 +749,15 @@ document.getElementById('pasteImgBtn').addEventListener('click', async () => {
       const imageType = item.types.find(type => type.startsWith('image/'));
       if (imageType) {
         const blob = await item.getType(imageType);
-        loadBlobAsResizedImage(blob, document.getElementById('pasteImgBtn'), '📋 コピーした画像を貼付', (img) => {
+        loadBlobAsResizedImage(blob, (img) => {
           addImageLayer(img, '貼付画像');
         });
         return;
       }
     }
-    alert('クリップボードに画像が見つかりませんでした。写真アプリで画像を長押し→「コピー」してから押してください。');
+    alert('クリップボードに画像がありません。写真アプリで画像をコピーしてから押してください。');
   } catch (err) {
-    alert('画面の何もない場所を長押しして「ペースト」を選ぶか、ボタンから「ペースト」を押してください。');
+    alert('画面の何もない場所を長押しして「ペースト」を選んでください。');
   }
 });
 
@@ -777,7 +767,7 @@ window.addEventListener('paste', (e) => {
   for (let i = 0; i < items.length; i++) {
     if (items[i].type.indexOf('image') !== -1) {
       const blob = items[i].getAsFile();
-      loadBlobAsResizedImage(blob, null, '', (img) => {
+      loadBlobAsResizedImage(blob, (img) => {
         addImageLayer(img, '貼付画像');
       });
       break;
@@ -785,7 +775,6 @@ window.addEventListener('paste', (e) => {
   }
 });
 
-// テキスト追加（虹色対応）
 document.getElementById('addTextBtn').addEventListener('click', () => {
   const input = document.getElementById('textInput');
   const text = input.value.trim();
@@ -985,8 +974,29 @@ document.getElementById('pinRadiusSlider').addEventListener('input', (e) => {
   }
 });
 
-document.getElementById('springSlider').addEventListener('input', (e) => {
+const springSlider = document.getElementById('springSlider');
+const dampingSlider = document.getElementById('dampingSlider');
+
+springSlider.addEventListener('input', (e) => {
   stiffness = Number(e.target.value);
+});
+
+dampingSlider.addEventListener('input', (e) => {
+  damping = Number(e.target.value);
+});
+
+document.getElementById('presetRubberBtn').addEventListener('click', () => {
+  stiffness = 0.65;
+  damping = 0.52;
+  springSlider.value = stiffness;
+  dampingSlider.value = damping;
+});
+
+document.getElementById('presetSlimeBtn').addEventListener('click', () => {
+  stiffness = 0.14;
+  damping = 0.86;
+  springSlider.value = stiffness;
+  dampingSlider.value = damping;
 });
 
 document.getElementById('resetDeformBtn').addEventListener('click', () => {
@@ -1031,6 +1041,31 @@ document.getElementById('saveBtn').addEventListener('click', () => {
     document.body.removeChild(link);
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }, 'image/png');
+});
+
+// 写真アプリからの直接ドラッグ＆ドロップ対応
+viewport.addEventListener('dragover', (e) => {
+  e.preventDefault();
+  viewport.style.outline = '4px dashed #1877f2';
+});
+
+viewport.addEventListener('dragleave', () => {
+  viewport.style.outline = 'none';
+});
+
+viewport.addEventListener('drop', (e) => {
+  e.preventDefault();
+  viewport.style.outline = 'none';
+  const files = e.dataTransfer && e.dataTransfer.files;
+  if (files && files.length > 0) {
+    for (let i = 0; i < files.length; i++) {
+      if (files[i].type.startsWith('image/')) {
+        loadBlobAsResizedImage(files[i], (img) => {
+          addImageLayer(img, files[i].name.slice(0, 12) || 'ドロップ画像');
+        });
+      }
+    }
+  }
 });
 
 window.addEventListener('resize', () => {
