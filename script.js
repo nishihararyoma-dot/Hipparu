@@ -14,17 +14,16 @@ let view = {
   y: 0
 };
 
-let mode = 'edit'; // 'edit' | 'pan' | 'pin' | 'pull' | 'crop'
+let mode = 'edit';
 let hideGuides = false;
 let freezePull = false;
 let syncPins = true;
-let fingerRadius = 80; // 引っ張る指の大きさ
+let fingerRadius = 80;
 
 let bgConfig = { type: 'solid', color1: '#ffffff', color2: '#a2d2ff', img: null };
-let layers = []; // { id, name, img, originalImg, x, y, scale, rotation }
+let layers = [];
 let selectedLayerId = null;
 
-// 切り抜きパス保持用
 let cropPoints = [];
 
 let pinAreas = [];
@@ -303,7 +302,6 @@ function renderFrame() {
     drawDeformedMesh(ctx);
   }
 
-  // 切り抜き（フリーハンド）中の線を描画
   if (mode === 'crop' && cropPoints.length > 0) {
     ctx.save();
     ctx.beginPath();
@@ -321,7 +319,6 @@ function renderFrame() {
     ctx.restore();
   }
 
-  // ガイド線の描画
   if (!hideGuides) {
     ctx.strokeStyle = 'rgba(0, 0, 0, 0.25)';
     ctx.lineWidth = 2 / view.scale;
@@ -386,7 +383,6 @@ function screenToDoc(clientX, clientY) {
   };
 }
 
-// 自由な形でレイヤー画像を切り抜く処理
 function applyFreehandCrop(layer, docPoints) {
   if (docPoints.length < 3) return;
 
@@ -395,7 +391,6 @@ function applyFreehandCrop(layer, docPoints) {
   cropCanvas.height = layer.img.height;
   const cCtx = cropCanvas.getContext('2d');
 
-  // ドキュメント座標をレイヤーのローカル座標（回転・スケール・中心位置を逆算）に変換
   const rad = (-layer.rotation * Math.PI) / 180;
   const cos = Math.cos(rad);
   const sin = Math.sin(rad);
@@ -531,8 +526,6 @@ canvas.addEventListener('pointerdown', (e) => {
         let maxInf = 0;
         for (let pin of targetPins) {
           const dist = Math.hypot(p.ox - pin.x, p.oy - pin.y);
-          // 赤い円の広さと「引っ張る指の大きさ」の両方を考慮
-          const effectiveRadius = Math.min(pin.radius, fingerRadius * 1.5);
           if (dist < pin.radius) {
             const inf = Math.cos((dist / pin.radius) * (Math.PI / 2));
             if (inf > maxInf) maxInf = inf;
@@ -546,7 +539,6 @@ canvas.addEventListener('pointerdown', (e) => {
         }
       }
     } else {
-      // 赤い円がない場合は「引っ張る指の大きさ(fingerRadius)」をそのまま範囲にする
       isDeformed = true;
       for (let p of points) {
         const dist = Math.hypot(p.ox - pos.x, p.oy - pos.y);
@@ -666,50 +658,12 @@ canvas.addEventListener('wheel', (e) => {
 
 document.getElementById('resetViewBtn').addEventListener('click', resetView);
 
-// Safariで100%確実に画像を開くための新しい軽量読み込み関数
-async function processImageFile(file, buttonElement, originalText, callback) {
-  if (!file) return;
+// 画像・Blobから確実にリサイズ済みImageを生成する共通関数
+function loadBlobAsResizedImage(blob, buttonElement, originalText, callback) {
+  if (!blob) return;
   if (buttonElement) buttonElement.textContent = '読み込み中...';
 
-  try {
-    // createImageBitmap が使える場合はメモリを圧迫せず高速にデコード＆リサイズ
-    if (window.createImageBitmap) {
-      const bitmap = await createImageBitmap(file);
-      const maxLoadSize = 900;
-      let w = bitmap.width;
-      let h = bitmap.height;
-
-      if (w > maxLoadSize || h > maxLoadSize) {
-        if (w >= h) {
-          h = Math.round((h / w) * maxLoadSize);
-          w = maxLoadSize;
-        } else {
-          w = Math.round((w / h) * maxLoadSize);
-          h = maxLoadSize;
-        }
-      }
-
-      const tempCanvas = document.createElement('canvas');
-      tempCanvas.width = w;
-      tempCanvas.height = h;
-      const tempCtx = tempCanvas.getContext('2d');
-      tempCtx.drawImage(bitmap, 0, 0, w, h);
-      bitmap.close();
-
-      const img = new Image();
-      img.onload = () => {
-        if (buttonElement) buttonElement.textContent = originalText;
-        callback(img);
-      };
-      img.src = tempCanvas.toDataURL('image/png');
-      return;
-    }
-  } catch (err) {
-    // フォールバック処理へ進む
-  }
-
-  // フォールバック：ObjectURLで直接読み込み
-  const url = URL.createObjectURL(file);
+  const url = URL.createObjectURL(blob);
   const rawImg = new Image();
   rawImg.onload = () => {
     const maxLoadSize = 900;
@@ -738,22 +692,46 @@ async function processImageFile(file, buttonElement, originalText, callback) {
       if (buttonElement) buttonElement.textContent = originalText;
       callback(img);
     };
+    img.onerror = () => {
+      if (buttonElement) buttonElement.textContent = originalText;
+      alert('画像の変換に失敗しました。');
+    };
     img.src = tempCanvas.toDataURL('image/png');
   };
   rawImg.onerror = () => {
     URL.revokeObjectURL(url);
     if (buttonElement) buttonElement.textContent = originalText;
-    alert('画像の読み込みに失敗しました。別の画像を選んでみてください。');
+    alert('画像の読み込みに失敗しました。');
   };
   rawImg.src = url;
+}
+
+function addImageLayer(img, nameText) {
+  const initialScale = Math.min((docWidth * 0.45) / img.width, (docHeight * 0.45) / img.height, 1.5);
+  const newLayer = {
+    id: Date.now() + Math.random(),
+    name: nameText,
+    img: img,
+    originalImg: img,
+    x: docWidth / 2,
+    y: docHeight / 2,
+    scale: Number(initialScale.toFixed(2)),
+    rotation: 0
+  };
+  layers.push(newLayer);
+  updateLayerSelectUI();
+  selectLayer(newLayer.id);
+  renderComposite();
+  switchMode('edit');
 }
 
 const bgImageInput = document.getElementById('bgImageInput');
 const bgImageBtn = document.getElementById('bgImageBtn');
 
 bgImageInput.addEventListener('change', (e) => {
-  const file = e.target.files[0];
-  processImageFile(file, bgImageBtn, 'ベース写真を選ぶ（比率自動）', (img) => {
+  const file = e.target.files && e.target.files[0];
+  if (!file) return;
+  loadBlobAsResizedImage(file, bgImageBtn, 'ベース写真を選ぶ（比率自動）', (img) => {
     bgConfig.img = img;
     resizeWorkspace(img.width, img.height);
     bgImageInput.value = '';
@@ -764,30 +742,47 @@ const addLayerInput = document.getElementById('addLayerInput');
 const addLayerBtn = document.getElementById('addLayerBtn');
 
 addLayerInput.addEventListener('change', (e) => {
-  const files = Array.from(e.target.files);
-  if (files.length === 0) return;
-
-  files.forEach((file, index) => {
-    processImageFile(file, addLayerBtn, '＋ 重ねる写真を追加', (img) => {
-      const initialScale = Math.min((docWidth * 0.45) / img.width, (docHeight * 0.45) / img.height, 1.5);
-      const newLayer = {
-        id: Date.now() + index + Math.random(),
-        name: file.name.slice(0, 12),
-        img: img,
-        originalImg: img,
-        x: docWidth / 2 + (index * 20),
-        y: docHeight / 2 + (index * 20),
-        scale: Number(initialScale.toFixed(2)),
-        rotation: 0
-      };
-      layers.push(newLayer);
-      updateLayerSelectUI();
-      selectLayer(newLayer.id);
-      renderComposite();
-      switchMode('edit');
-    });
+  const file = e.target.files && e.target.files[0];
+  if (!file) return;
+  const labelName = file.name ? file.name.slice(0, 12) : '写真';
+  loadBlobAsResizedImage(file, addLayerBtn, '＋ 重ねる写真を追加', (img) => {
+    addImageLayer(img, labelName);
+    addLayerInput.value = '';
   });
-  addLayerInput.value = '';
+});
+
+// クリップボードから画像を貼り付ける機能（ボタン＆ペーストイベント両対応）
+document.getElementById('pasteImgBtn').addEventListener('click', async () => {
+  try {
+    const items = await navigator.clipboard.read();
+    for (const item of items) {
+      const imageType = item.types.find(type => type.startsWith('image/'));
+      if (imageType) {
+        const blob = await item.getType(imageType);
+        loadBlobAsResizedImage(blob, document.getElementById('pasteImgBtn'), '📋 コピーした画像を貼付', (img) => {
+          addImageLayer(img, '貼付画像');
+        });
+        return;
+      }
+    }
+    alert('クリップボードに画像が見つかりませんでした。写真アプリで画像を長押し→「コピー」してから押してください。');
+  } catch (err) {
+    alert('画面の何もない場所を長押しして「ペースト」を選ぶか、ボタンから「ペースト」を押してください。');
+  }
+});
+
+window.addEventListener('paste', (e) => {
+  const items = e.clipboardData && e.clipboardData.items;
+  if (!items) return;
+  for (let i = 0; i < items.length; i++) {
+    if (items[i].type.indexOf('image') !== -1) {
+      const blob = items[i].getAsFile();
+      loadBlobAsResizedImage(blob, null, '', (img) => {
+        addImageLayer(img, '貼付画像');
+      });
+      break;
+    }
+  }
 });
 
 // テキスト追加（虹色対応）
@@ -830,21 +825,7 @@ document.getElementById('addTextBtn').addEventListener('click', () => {
 
   const img = new Image();
   img.onload = () => {
-    const newLayer = {
-      id: Date.now() + Math.random(),
-      name: `文字:${text.slice(0, 8)}`,
-      img: img,
-      originalImg: img,
-      x: docWidth / 2,
-      y: docHeight / 2,
-      scale: 0.7,
-      rotation: 0
-    };
-    layers.push(newLayer);
-    updateLayerSelectUI();
-    selectLayer(newLayer.id);
-    renderComposite();
-    switchMode('edit');
+    addImageLayer(img, `文字:${text.slice(0, 8)}`);
     input.value = '';
   };
   img.src = tCanvas.toDataURL('image/png');
@@ -910,7 +891,6 @@ document.getElementById('layerRotate').addEventListener('input', (e) => {
   }
 });
 
-// 好きな形に切るボタン＆戻すボタン
 document.getElementById('cropModeBtn').addEventListener('click', () => {
   if (!selectedLayerId) return;
   mode = 'crop';
