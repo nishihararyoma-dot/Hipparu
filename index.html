@@ -48,7 +48,8 @@
       <h2>2. 写真・テキストを追加・編集</h2>
       <div class="row">
         <label for="addLayerInput" id="addLayerBtn" class="btn primary">＋ 重ねる写真を追加</label>
-        <input type="file" id="addLayerInput" accept="image/*" multiple class="hidden-file-input">
+        <input type="file" id="addLayerInput" accept="image/*" class="hidden-file-input">
+        <button type="button" id="pasteImgBtn" class="btn">📋 コピーした画像を貼付</button>
       </div>
 
       <!-- テキスト追加エリア -->
@@ -109,7 +110,7 @@
       </div>
     </div>
 
-    <!-- サブ機能用オプション（指の大きさスライダー追加） -->
+    <!-- サブ機能用オプション -->
     <div id="pullOptions" class="panel sub-panel hidden">
       <div class="row" style="flex-direction: column; align-items: flex-start; gap: 6px; margin-bottom: 8px;">
         <label style="font-size: 0.85rem; font-weight: bold; display: flex; align-items: center; gap: 6px; cursor: pointer;">
