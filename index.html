@@ -129,10 +129,11 @@
       </div>
 
       <div class="sliders">
-        <label>👆 引っ張る指の大きさ: <input type="range" id="fingerRadiusSlider" min="10" max="250" value="80"></label>
-        <label>🎯 選択中の赤丸の広さ: <input type="range" id="pinRadiusSlider" min="10" max="250" value="60"></label>
-        <label>⚡ 戻るスピード（弾力）: <input type="range" id="springSlider" min="0.05" max="0.85" step="0.02" value="0.55"></label>
-        <label>〰️ 揺れの残りやすさ: <input type="range" id="dampingSlider" min="0.30" max="0.92" step="0.02" value="0.58"></label>
+        <label>⭕ 円の塊感（丸ごと伸びる）: <input type="range" id="roundnessSlider" min="0.1" max="0.95" step="0.05" value="0.75"></label>
+        <label>👆 引っ張る指の大きさ: <input type="range" id="fingerRadiusSlider" min="15" max="250" value="90"></label>
+        <label>🎯 選択中の赤丸の広さ: <input type="range" id="pinRadiusSlider" min="15" max="250" value="75"></label>
+        <label>⚡ 戻るスピード（独立）: <input type="range" id="springSlider" min="0.1" max="1.0" step="0.05" value="0.80"></label>
+        <label>〰️ 揺れの回数（独立）: <input type="range" id="bounceSlider" min="0.0" max="0.90" step="0.05" value="0.25"></label>
       </div>
       <div class="row" style="margin-top: 8px;">
         <button type="button" id="resetDeformBtn" class="btn small">変形を元に戻す</button>
