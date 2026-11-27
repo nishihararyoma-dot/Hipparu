@@ -18,7 +18,8 @@ let mode = 'edit'; // 'edit' | 'pan' | 'pin' | 'pull' | 'crop'
 let hideGuides = false;
 let freezePull = false;
 let syncPins = true;
-let fingerRadius = 80;
+let fingerRadius = 90;
+let roundness = 0.75; // 円の塊感（高いほど円全体が丸ごと伸びる）
 
 let bgConfig = { type: 'solid', color1: '#ffffff', color2: '#a2d2ff', img: null };
 let layers = [];
@@ -28,12 +29,18 @@ let cropPoints = [];
 
 let pinAreas = [];
 let selectedPinId = null;
-let stiffness = 0.55;
-let damping = 0.58;
-const COLS = 24;
-const ROWS = 24;
+
+// 独立した「戻るスピード」と「揺れの回数」
+let returnSpeed = 0.80; // 0.1〜1.0（速さ）
+let bounceAmount = 0.25; // 0.0〜0.90（跳ね返り・揺れ残り）
+
+const COLS = 28;
+const ROWS = 28;
 let points = [];
 let isDeformed = false;
+
+// 引っ張り中の視覚ガイド用
+let activePullCircle = null; // { x, y, radius }
 
 function syncViewportSize() {
   const rect = viewport.getBoundingClientRect();
@@ -101,6 +108,19 @@ function initMesh() {
     }
   }
   isDeformed = false;
+}
+
+// 円の塊感を計算する関数（内側が丸ごとついてくるドームカーブ）
+function calcCircleInfluence(dist, radius) {
+  if (dist >= radius) return 0;
+  const norm = dist / radius; // 0(中心) 〜 1(フチ)
+  // roundnessが高いほど、中心付近が平らに1.0を保ち、フチ近くで滑らかに0へ落ちる
+  const flatZone = roundness * 0.75;
+  if (norm <= flatZone) {
+    return 1.0;
+  }
+  const edgeNorm = (norm - flatZone) / (1.0 - flatZone);
+  return 0.5 * (1 + Math.cos(edgeNorm * Math.PI));
 }
 
 function renderComposite() {
@@ -262,24 +282,36 @@ function drawDeformedMesh(targetCtx) {
 function renderFrame() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
+  // 「戻るスピード」と「揺れの回数」を完全に独立させた物理演算
   if (isDeformed) {
     let anyDeformed = false;
+    // returnSpeed (0.1〜1.0) から固有角振動数 omega を決定（最大で1〜2フレームで到達する超高速スナップ）
+    const omega = 0.22 + returnSpeed * 1.15;
+    // bounceAmount (0.0〜0.9) から減衰比 zeta を決定（0なら揺れゼロでピタッと止まり、0.9なら長く揺れる）
+    const zeta = 1.0 - bounceAmount * 0.92;
+
     for (let p of points) {
       if (!p.grabbed && !freezePull) {
-        const fx = (p.ox - p.x) * stiffness;
-        const fy = (p.oy - p.y) * stiffness;
-        p.vx = (p.vx + fx) * damping;
-        p.vy = (p.vy + fy) * damping;
+        const dx = p.ox - p.x;
+        const dy = p.oy - p.y;
+
+        // 減衰振動の正確な離散ステップ（スピードと揺れが干渉しない）
+        const ax = omega * omega * dx - 2 * zeta * omega * p.vx;
+        const ay = omega * omega * dy - 2 * zeta * omega * p.vy;
+
+        p.vx += ax;
+        p.vy += ay;
         p.x += p.vx;
         p.y += p.vy;
 
-        if (Math.abs(p.ox - p.x) > 0.1 || Math.abs(p.oy - p.y) > 0.1 || Math.abs(p.vx) > 0.1 || Math.abs(p.vy) > 0.1) {
-          anyDeformed = true;
-        } else {
+        // 振動がオーバーシュートして暴れないよう安全リミット
+        if (Math.abs(p.ox - p.x) < 0.25 && Math.abs(p.oy - p.y) < 0.25 && Math.abs(p.vx) < 0.25 && Math.abs(p.vy) < 0.25) {
           p.x = p.ox;
           p.y = p.oy;
           p.vx = 0;
           p.vy = 0;
+        } else {
+          anyDeformed = true;
         }
       } else {
         if (Math.abs(p.ox - p.x) > 0.1 || Math.abs(p.oy - p.y) > 0.1 || p.grabbed) {
@@ -340,26 +372,43 @@ function renderFrame() {
       }
     }
 
-    if (mode === 'pin' && pinAreas.length > 0) {
+    // 範囲指定モード、または引っ張りモードでも赤い円を薄く表示して掴みやすくする
+    if ((mode === 'pin' || mode === 'pull') && pinAreas.length > 0) {
       pinAreas.forEach((pin, index) => {
         const isSelected = pin.id === selectedPinId;
         ctx.save();
         ctx.beginPath();
         ctx.arc(pin.x, pin.y, pin.radius, 0, Math.PI * 2);
-        ctx.strokeStyle = isSelected ? 'rgba(228, 30, 63, 1.0)' : 'rgba(228, 30, 63, 0.55)';
-        ctx.lineWidth = (isSelected ? 3.5 : 2) / view.scale;
+        ctx.strokeStyle = mode === 'pin'
+          ? (isSelected ? 'rgba(228, 30, 63, 1.0)' : 'rgba(228, 30, 63, 0.55)')
+          : 'rgba(228, 30, 63, 0.35)';
+        ctx.lineWidth = (isSelected && mode === 'pin' ? 3.5 : 2) / view.scale;
         ctx.setLineDash([8 / view.scale, 6 / view.scale]);
         ctx.stroke();
-        ctx.fillStyle = isSelected ? 'rgba(228, 30, 63, 0.2)' : 'rgba(228, 30, 63, 0.08)';
-        ctx.fill();
-
-        ctx.fillStyle = '#e41e3f';
-        ctx.font = `bold ${Math.round(16 / view.scale)}px sans-serif`;
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(String(index + 1), pin.x, pin.y);
+        if (mode === 'pin') {
+          ctx.fillStyle = isSelected ? 'rgba(228, 30, 63, 0.2)' : 'rgba(228, 30, 63, 0.08)';
+          ctx.fill();
+          ctx.fillStyle = '#e41e3f';
+          ctx.font = `bold ${Math.round(16 / view.scale)}px sans-serif`;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(String(index + 1), pin.x, pin.y);
+        }
         ctx.restore();
       });
+    }
+
+    // 引っ張っている最中の「掴んでいる円」の視覚ガイド
+    if (mode === 'pull' && activePullCircle) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(activePullCircle.x, activePullCircle.y, activePullCircle.radius, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(24, 119, 242, 0.75)';
+      ctx.lineWidth = 2.5 / view.scale;
+      ctx.stroke();
+      ctx.fillStyle = 'rgba(24, 119, 242, 0.12)';
+      ctx.fill();
+      ctx.restore();
     }
   }
 
@@ -431,6 +480,7 @@ let lastPinchCenter = null;
 let singleAction = null;
 let dragOffset = { x: 0, y: 0 };
 let pullDragStart = { x: 0, y: 0 };
+let pullCircleOrigin = { x: 0, y: 0 };
 
 canvas.addEventListener('pointerdown', (e) => {
   canvas.setPointerCapture(e.pointerId);
@@ -438,6 +488,7 @@ canvas.addEventListener('pointerdown', (e) => {
 
   if (activePointers.size >= 2) {
     singleAction = null;
+    activePullCircle = null;
     for (let p of points) p.grabbed = false;
     const pts = Array.from(activePointers.values());
     lastPinchDist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
@@ -521,15 +572,18 @@ canvas.addEventListener('pointerdown', (e) => {
 
       isDeformed = true;
       const targetPins = syncPins ? pinAreas : [hitPin];
+      pullCircleOrigin = { x: hitPin.x, y: hitPin.y };
+      activePullCircle = { x: hitPin.x, y: hitPin.y, radius: hitPin.radius };
 
       for (let p of points) {
         let maxInf = 0;
         for (let pin of targetPins) {
-          const dist = Math.hypot(p.ox - pin.x, p.oy - pin.y);
-          if (dist < pin.radius) {
-            const inf = Math.cos((dist / pin.radius) * (Math.PI / 2));
-            if (inf > maxInf) maxInf = inf;
-          }
+          // すでに変形している頂点(p.x, p.y)と元の座標(p.ox, p.oy)の近い方で判定し、丸ごと掴む
+          const distOrig = Math.hypot(p.ox - pin.x, p.oy - pin.y);
+          const distCurr = Math.hypot(p.x - pin.x, p.y - pin.y);
+          const dist = Math.min(distOrig, distCurr);
+          const inf = calcCircleInfluence(dist, pin.radius);
+          if (inf > maxInf) maxInf = inf;
         }
         if (maxInf > 0) {
           p.grabbed = true;
@@ -540,11 +594,17 @@ canvas.addEventListener('pointerdown', (e) => {
       }
     } else {
       isDeformed = true;
+      pullCircleOrigin = { x: pos.x, y: pos.y };
+      activePullCircle = { x: pos.x, y: pos.y, radius: fingerRadius };
+
       for (let p of points) {
-        const dist = Math.hypot(p.ox - pos.x, p.oy - pos.y);
-        if (dist < fingerRadius) {
+        const distOrig = Math.hypot(p.ox - pos.x, p.oy - pos.y);
+        const distCurr = Math.hypot(p.x - pos.x, p.y - pos.y);
+        const dist = Math.min(distOrig, distCurr);
+        const inf = calcCircleInfluence(dist, fingerRadius);
+        if (inf > 0) {
           p.grabbed = true;
-          p.influence = Math.cos((dist / fingerRadius) * (Math.PI / 2));
+          p.influence = inf;
           p.startX = p.x;
           p.startY = p.y;
         }
@@ -605,6 +665,10 @@ canvas.addEventListener('pointermove', (e) => {
   } else if (singleAction === 'pull') {
     const moveX = pos.x - pullDragStart.x;
     const moveY = pos.y - pullDragStart.y;
+    if (activePullCircle) {
+      activePullCircle.x = pullCircleOrigin.x + moveX;
+      activePullCircle.y = pullCircleOrigin.y + moveY;
+    }
     for (let p of points) {
       if (p.grabbed) {
         p.x = p.startX + moveX * p.influence;
@@ -632,6 +696,7 @@ function handlePointerEnd(e) {
       }
     }
     singleAction = null;
+    activePullCircle = null;
     for (let p of points) {
       p.grabbed = false;
     }
@@ -962,6 +1027,10 @@ document.getElementById('syncPinsCheck').addEventListener('change', (e) => {
   syncPins = e.target.checked;
 });
 
+document.getElementById('roundnessSlider').addEventListener('input', (e) => {
+  roundness = Number(e.target.value);
+});
+
 document.getElementById('fingerRadiusSlider').addEventListener('input', (e) => {
   fingerRadius = Number(e.target.value);
 });
@@ -975,28 +1044,28 @@ document.getElementById('pinRadiusSlider').addEventListener('input', (e) => {
 });
 
 const springSlider = document.getElementById('springSlider');
-const dampingSlider = document.getElementById('dampingSlider');
+const bounceSlider = document.getElementById('bounceSlider');
 
 springSlider.addEventListener('input', (e) => {
-  stiffness = Number(e.target.value);
+  returnSpeed = Number(e.target.value);
 });
 
-dampingSlider.addEventListener('input', (e) => {
-  damping = Number(e.target.value);
+bounceSlider.addEventListener('input', (e) => {
+  bounceAmount = Number(e.target.value);
 });
 
 document.getElementById('presetRubberBtn').addEventListener('click', () => {
-  stiffness = 0.65;
-  damping = 0.52;
-  springSlider.value = stiffness;
-  dampingSlider.value = damping;
+  returnSpeed = 0.85;
+  bounceAmount = 0.25;
+  springSlider.value = returnSpeed;
+  bounceSlider.value = bounceAmount;
 });
 
 document.getElementById('presetSlimeBtn').addEventListener('click', () => {
-  stiffness = 0.14;
-  damping = 0.86;
-  springSlider.value = stiffness;
-  dampingSlider.value = damping;
+  returnSpeed = 0.20;
+  bounceAmount = 0.80;
+  springSlider.value = returnSpeed;
+  bounceSlider.value = bounceAmount;
 });
 
 document.getElementById('resetDeformBtn').addEventListener('click', () => {
@@ -1043,7 +1112,6 @@ document.getElementById('saveBtn').addEventListener('click', () => {
   }, 'image/png');
 });
 
-// 写真アプリからの直接ドラッグ＆ドロップ対応
 viewport.addEventListener('dragover', (e) => {
   e.preventDefault();
   viewport.style.outline = '4px dashed #1877f2';
