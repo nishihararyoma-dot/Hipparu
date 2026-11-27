@@ -14,7 +14,7 @@ let view = {
   y: 0
 };
 
-let mode = 'edit';
+let mode = 'edit'; // 'edit' | 'pan' | 'pin' | 'pull' | 'crop' | 'pickColor'
 let hideGuides = false;
 let globalInvert = false;
 let freezePull = false;
@@ -42,6 +42,57 @@ let isDeformed = false;
 let activePullCircle = null;
 let lastFrameTime = performance.now();
 
+// 1つ戻る（Undo）用の履歴スタック
+let undoStack = [];
+const MAX_UNDO = 20;
+
+function saveUndoState() {
+  const snapshot = {
+    docWidth,
+    docHeight,
+    bgConfig: { ...bgConfig },
+    layers: layers.map(l => ({ ...l })),
+    selectedLayerId,
+    globalInvert,
+    points: points.map(p => ({ ...p })),
+    isDeformed
+  };
+  undoStack.push(snapshot);
+  if (undoStack.length > MAX_UNDO) {
+    undoStack.shift();
+  }
+  updateUndoButton();
+}
+
+function updateUndoButton() {
+  const btn = document.getElementById('undoBtn');
+  btn.textContent = `↩️ 1つ戻る (${undoStack.length})`;
+  btn.disabled = undoStack.length === 0;
+}
+
+document.getElementById('undoBtn').addEventListener('click', () => {
+  if (undoStack.length === 0) return;
+  const prev = undoStack.pop();
+  docWidth = prev.docWidth;
+  docHeight = prev.docHeight;
+  offCanvas.width = docWidth;
+  offCanvas.height = docHeight;
+  bgConfig = { ...prev.bgConfig };
+  layers = prev.layers.map(l => ({ ...l }));
+  selectedLayerId = prev.selectedLayerId;
+  globalInvert = prev.globalInvert;
+  document.getElementById('globalInvertCheck').checked = globalInvert;
+  points = prev.points.map(p => ({ ...p }));
+  isDeformed = prev.isDeformed;
+
+  updateLayerSelectUI();
+  if (selectedLayerId && layers.some(l => l.id === selectedLayerId)) {
+    selectLayer(selectedLayerId);
+  }
+  renderComposite();
+  updateUndoButton();
+});
+
 function syncViewportSize() {
   const rect = viewport.getBoundingClientRect();
   canvas.width = rect.width;
@@ -65,7 +116,8 @@ function updateZoomLabel() {
   document.getElementById('zoomLabel').textContent = `${percent}%`;
 }
 
-function resizeWorkspace(width, height) {
+function resizeWorkspace(width, height, recordUndo = false) {
+  if (recordUndo) saveUndoState();
   const targetMax = 800;
   let w = width;
   let h = height;
@@ -121,7 +173,7 @@ function calcCircleInfluence(dist, radius) {
   return 0.5 * (1 + Math.cos(edgeNorm * Math.PI));
 }
 
-function applyPixelEffectToImage(sourceImg, type, callback) {
+function applyPixelEffectToImage(sourceImg, type, callback, targetHex = '#ffffff') {
   const c = document.createElement('canvas');
   c.width = sourceImg.width;
   c.height = sourceImg.height;
@@ -130,6 +182,10 @@ function applyPixelEffectToImage(sourceImg, type, callback) {
 
   const imgData = cx.getImageData(0, 0, c.width, c.height);
   const data = imgData.data;
+
+  const tr = parseInt(targetHex.slice(1, 3), 16);
+  const tg = parseInt(targetHex.slice(3, 5), 16);
+  const tb = parseInt(targetHex.slice(5, 7), 16);
 
   for (let i = 0; i < data.length; i += 4) {
     if (data[i + 3] === 0) continue;
@@ -142,6 +198,14 @@ function applyPixelEffectToImage(sourceImg, type, callback) {
       data[i] = avg;
       data[i + 1] = avg;
       data[i + 2] = avg;
+    } else if (type === 'chroma') {
+      const dist = Math.hypot(data[i] - tr, data[i + 1] - tg, data[i + 2] - tb);
+      if (dist < 55) {
+        data[i + 3] = 0; // 指定色と近い色を完全透明に
+      } else if (dist < 75) {
+        // 境界を滑らかに半透明化
+        data[i + 3] = Math.round(((dist - 55) / 20) * data[i + 3]);
+      }
     }
   }
   cx.putImageData(imgData, 0, 0);
@@ -158,7 +222,7 @@ function renderComposite() {
 
   if (bgConfig.img) {
     offCtx.drawImage(bgConfig.img, 0, 0, w, h);
-  } else {
+  } else if (bgConfig.type !== 'transparent') {
     drawGeneratedBackground(offCtx, w, h);
   }
 
@@ -180,6 +244,7 @@ function renderComposite() {
     const imgData = offCtx.getImageData(0, 0, w, h);
     const data = imgData.data;
     for (let i = 0; i < data.length; i += 4) {
+      if (data[i + 3] === 0) continue; // 透明背景部分は透明のまま維持
       data[i] = 255 - data[i];
       data[i + 1] = 255 - data[i + 1];
       data[i + 2] = 255 - data[i + 2];
@@ -230,6 +295,18 @@ function drawGeneratedBackground(context, w, h) {
         context.fillStyle = isEven ? color1 : color2;
         context.fillRect(x, y, size, size);
       }
+    }
+  }
+}
+
+// 編集画面で透明背景が分かりやすいように薄い市松模様を描画する（保存時は描画しない）
+function drawTransparentCheckerboard(targetCtx, w, h) {
+  const size = 24;
+  for (let y = 0; y < h; y += size) {
+    for (let x = 0; x < w; x += size) {
+      const isEven = ((x / size) + (y / size)) % 2 === 0;
+      targetCtx.fillStyle = isEven ? '#ffffff' : '#e5e7eb';
+      targetCtx.fillRect(x, y, Math.min(size, w - x), Math.min(size, h - y));
     }
   }
 }
@@ -324,7 +401,6 @@ function drawDeformedMesh(targetCtx) {
 
 function renderFrame(now) {
   const currentNow = now || performance.now();
-  // スマホの120Hz画面でもPCの60Hz画面でも同じ速さになるよう経過時間で正規化
   const elapsedMs = Math.min(currentNow - lastFrameTime, 50);
   lastFrameTime = currentNow;
   const timeScale = elapsedMs / (1000 / 60);
@@ -335,7 +411,6 @@ function renderFrame(now) {
     let anyDeformed = false;
     const subSteps = 4;
     const dt = timeScale / subSteps;
-    // 下限を大幅に拡張（returnSpeed=0.01で超スローモーション、1.0で超高速パチン）
     const omega = 0.018 + Math.pow(returnSpeed, 1.35) * 1.55;
     const zeta = 1.0 - bounceAmount * 0.90;
 
@@ -377,6 +452,11 @@ function renderFrame(now) {
   ctx.translate(view.x, view.y);
   ctx.scale(view.scale, view.scale);
 
+  // 背景が透明の場合は編集画面のみ市松模様を敷く
+  if (!bgConfig.img && bgConfig.type === 'transparent') {
+    drawTransparentCheckerboard(ctx, docWidth, docHeight);
+  }
+
   if (!isDeformed) {
     ctx.drawImage(offCanvas, 0, 0);
   } else {
@@ -405,7 +485,7 @@ function renderFrame(now) {
     ctx.lineWidth = 2 / view.scale;
     ctx.strokeRect(0, 0, docWidth, docHeight);
 
-    if ((mode === 'edit' || mode === 'crop') && selectedLayerId) {
+    if ((mode === 'edit' || mode === 'crop' || mode === 'pickColor') && selectedLayerId) {
       const layer = layers.find(l => l.id === selectedLayerId);
       if (layer) {
         ctx.save();
@@ -413,7 +493,7 @@ function renderFrame(now) {
         ctx.rotate((layer.rotation * Math.PI) / 180);
         const lw = layer.img.width * layer.scale;
         const lh = layer.img.height * layer.scale;
-        ctx.strokeStyle = mode === 'crop' ? '#f59e0b' : '#1877f2';
+        ctx.strokeStyle = (mode === 'crop' || mode === 'pickColor') ? '#f59e0b' : '#1877f2';
         ctx.lineWidth = 2.5 / view.scale;
         ctx.setLineDash([8 / view.scale, 8 / view.scale]);
         ctx.strokeRect(-lw / 2, -lh / 2, lw, lh);
@@ -481,6 +561,7 @@ function screenToDoc(clientX, clientY) {
 
 function applyFreehandCrop(layer, docPoints) {
   if (docPoints.length < 3) return;
+  saveUndoState();
 
   const cropCanvas = document.createElement('canvas');
   cropCanvas.width = layer.img.width;
@@ -513,12 +594,12 @@ function applyFreehandCrop(layer, docPoints) {
     layer.img = croppedImg;
     layer.baseEffectImg = croppedImg;
     renderComposite();
-    exitCropMode();
+    exitNoticeMode();
   };
   croppedImg.src = cropCanvas.toDataURL('image/png');
 }
 
-function exitCropMode() {
+function exitNoticeMode() {
   cropPoints = [];
   document.getElementById('cropNoticePanel').classList.add('hidden');
   switchMode('edit');
@@ -531,6 +612,7 @@ let singleAction = null;
 let dragOffset = { x: 0, y: 0 };
 let pullDragStart = { x: 0, y: 0 };
 let pullCircleOrigin = { x: 0, y: 0 };
+let hasSavedDragUndo = false;
 
 canvas.addEventListener('pointerdown', (e) => {
   canvas.setPointerCapture(e.pointerId);
@@ -552,6 +634,31 @@ canvas.addEventListener('pointerdown', (e) => {
 
   const pos = screenToDoc(e.clientX, e.clientY);
 
+  // タップした色を透明にするモード
+  if (mode === 'pickColor' && selectedLayerId) {
+    const layer = layers.find(l => l.id === selectedLayerId);
+    if (layer) {
+      const px = Math.floor(pos.x);
+      const py = Math.floor(pos.y);
+      if (px >= 0 && px < docWidth && py >= 0 && py < docHeight) {
+        const pixel = offCtx.getImageData(px, py, 1, 1).data;
+        if (pixel[3] > 0) {
+          const hex = '#' + [pixel[0], pixel[1], pixel[2]].map(v => v.toString(16).padStart(2, '0')).join('');
+          document.getElementById('chromaColor').value = hex;
+          saveUndoState();
+          applyPixelEffectToImage(layer.img, 'chroma', (newImg) => {
+            layer.img = newImg;
+            renderComposite();
+            exitNoticeMode();
+          }, hex);
+          return;
+        }
+      }
+    }
+    exitNoticeMode();
+    return;
+  }
+
   if (mode === 'crop') {
     singleAction = 'crop';
     cropPoints = [{ x: pos.x, y: pos.y }];
@@ -572,6 +679,7 @@ canvas.addEventListener('pointerdown', (e) => {
       if (Math.abs(pos.x - l.x) <= hw && Math.abs(pos.y - l.y) <= hh) {
         selectLayer(l.id);
         singleAction = 'layer';
+        hasSavedDragUndo = false;
         dragOffset = { x: pos.x - l.x, y: pos.y - l.y };
         return;
       }
@@ -604,6 +712,7 @@ canvas.addEventListener('pointerdown', (e) => {
   } else if (mode === 'pull') {
     singleAction = 'pull';
     pullDragStart = { x: pos.x, y: pos.y };
+    hasSavedDragUndo = false;
 
     if (pinAreas.length > 0) {
       let hitPin = null;
@@ -620,6 +729,7 @@ canvas.addEventListener('pointerdown', (e) => {
         return;
       }
 
+      if (freezePull) saveUndoState();
       isDeformed = true;
       const targetPins = syncPins ? pinAreas : [hitPin];
       pullCircleOrigin = { x: hitPin.x, y: hitPin.y };
@@ -642,6 +752,7 @@ canvas.addEventListener('pointerdown', (e) => {
         }
       }
     } else {
+      if (freezePull) saveUndoState();
       isDeformed = true;
       pullCircleOrigin = { x: pos.x, y: pos.y };
       activePullCircle = { x: pos.x, y: pos.y, radius: fingerRadius };
@@ -701,6 +812,10 @@ canvas.addEventListener('pointermove', (e) => {
   } else if (singleAction === 'layer' && selectedLayerId) {
     const layer = layers.find(l => l.id === selectedLayerId);
     if (layer) {
+      if (!hasSavedDragUndo) {
+        saveUndoState();
+        hasSavedDragUndo = true;
+      }
       layer.x = pos.x - dragOffset.x;
       layer.y = pos.y - dragOffset.y;
       renderComposite();
@@ -741,7 +856,7 @@ function handlePointerEnd(e) {
       if (layer && cropPoints.length > 5) {
         applyFreehandCrop(layer, cropPoints);
       } else {
-        exitCropMode();
+        exitNoticeMode();
       }
     }
     singleAction = null;
@@ -816,6 +931,7 @@ function loadBlobAsResizedImage(blob, callback) {
 }
 
 function addImageLayer(img, nameText) {
+  saveUndoState();
   const initialScale = Math.min((docWidth * 0.45) / img.width, (docHeight * 0.45) / img.height, 1.5);
   const newLayer = {
     id: Date.now() + Math.random(),
@@ -842,8 +958,9 @@ bgImageInput.addEventListener('change', (e) => {
   const file = e.target.files && e.target.files[0];
   if (!file) return;
   loadBlobAsResizedImage(file, (img) => {
+    saveUndoState();
     bgConfig.img = img;
-    resizeWorkspace(img.width, img.height);
+    resizeWorkspace(img.width, img.height, false);
     bgImageInput.value = '';
   });
 });
@@ -938,13 +1055,14 @@ document.getElementById('addTextBtn').addEventListener('click', () => {
 });
 
 document.getElementById('createBgBtn').addEventListener('click', () => {
+  saveUndoState();
   const aspect = document.getElementById('aspectSelect').value;
   const [aw, ah] = aspect.split(':').map(Number);
   bgConfig.img = null;
   bgConfig.type = document.getElementById('bgTypeSelect').value;
   bgConfig.color1 = document.getElementById('bgColor1').value;
   bgConfig.color2 = document.getElementById('bgColor2').value;
-  resizeWorkspace(aw * 200, ah * 200);
+  resizeWorkspace(aw * 200, ah * 200, false);
 });
 
 function updateLayerSelectUI() {
@@ -982,7 +1100,9 @@ document.getElementById('layerSelect').addEventListener('change', (e) => {
   selectLayer(e.target.value);
 });
 
-document.getElementById('layerScale').addEventListener('input', (e) => {
+const layerScaleInput = document.getElementById('layerScale');
+layerScaleInput.addEventListener('pointerdown', () => saveUndoState());
+layerScaleInput.addEventListener('input', (e) => {
   const layer = layers.find(l => l.id === selectedLayerId);
   if (layer) {
     layer.scale = Number(e.target.value);
@@ -990,7 +1110,9 @@ document.getElementById('layerScale').addEventListener('input', (e) => {
   }
 });
 
-document.getElementById('layerRotate').addEventListener('input', (e) => {
+const layerRotateInput = document.getElementById('layerRotate');
+layerRotateInput.addEventListener('pointerdown', () => saveUndoState());
+layerRotateInput.addEventListener('input', (e) => {
   const layer = layers.find(l => l.id === selectedLayerId);
   if (layer) {
     layer.rotation = Number(e.target.value);
@@ -998,7 +1120,9 @@ document.getElementById('layerRotate').addEventListener('input', (e) => {
   }
 });
 
-document.getElementById('layerAlpha').addEventListener('input', (e) => {
+const layerAlphaInput = document.getElementById('layerAlpha');
+layerAlphaInput.addEventListener('pointerdown', () => saveUndoState());
+layerAlphaInput.addEventListener('input', (e) => {
   const layer = layers.find(l => l.id === selectedLayerId);
   if (layer) {
     layer.alpha = Number(e.target.value);
@@ -1009,14 +1133,37 @@ document.getElementById('layerAlpha').addEventListener('input', (e) => {
 document.getElementById('flipHBtn').addEventListener('click', () => {
   const layer = layers.find(l => l.id === selectedLayerId);
   if (layer) {
+    saveUndoState();
     layer.flipH = !layer.flipH;
     renderComposite();
+  }
+});
+
+document.getElementById('pickTransparentBtn').addEventListener('click', () => {
+  if (!selectedLayerId) return;
+  mode = 'pickColor';
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.getElementById('pullOptions').classList.add('hidden');
+  document.getElementById('noticeText').textContent = '👆 透明にしたい背景色の部分をタップしてください';
+  document.getElementById('cropNoticePanel').classList.remove('hidden');
+});
+
+document.getElementById('applyChromaBtn').addEventListener('click', () => {
+  const layer = layers.find(l => l.id === selectedLayerId);
+  if (layer) {
+    saveUndoState();
+    const hex = document.getElementById('chromaColor').value;
+    applyPixelEffectToImage(layer.img, 'chroma', (newImg) => {
+      layer.img = newImg;
+      renderComposite();
+    }, hex);
   }
 });
 
 document.getElementById('invertLayerBtn').addEventListener('click', () => {
   const layer = layers.find(l => l.id === selectedLayerId);
   if (layer) {
+    saveUndoState();
     applyPixelEffectToImage(layer.img, 'invert', (newImg) => {
       layer.img = newImg;
       renderComposite();
@@ -1027,6 +1174,7 @@ document.getElementById('invertLayerBtn').addEventListener('click', () => {
 document.getElementById('grayLayerBtn').addEventListener('click', () => {
   const layer = layers.find(l => l.id === selectedLayerId);
   if (layer) {
+    saveUndoState();
     applyPixelEffectToImage(layer.img, 'grayscale', (newImg) => {
       layer.img = newImg;
       renderComposite();
@@ -1037,6 +1185,7 @@ document.getElementById('grayLayerBtn').addEventListener('click', () => {
 document.getElementById('resetFilterBtn').addEventListener('click', () => {
   const layer = layers.find(l => l.id === selectedLayerId);
   if (layer && layer.baseEffectImg) {
+    saveUndoState();
     layer.img = layer.baseEffectImg;
     renderComposite();
   }
@@ -1048,14 +1197,16 @@ document.getElementById('cropModeBtn').addEventListener('click', () => {
   cropPoints = [];
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
   document.getElementById('pullOptions').classList.add('hidden');
+  document.getElementById('noticeText').textContent = '✂️ 切り抜き中：残したい部分を指でなぞって囲んでください（指を離すと切り抜かれます）';
   document.getElementById('cropNoticePanel').classList.remove('hidden');
 });
 
-document.getElementById('cancelCropBtn').addEventListener('click', exitCropMode);
+document.getElementById('cancelCropBtn').addEventListener('click', exitNoticeMode);
 
 document.getElementById('resetCropBtn').addEventListener('click', () => {
   const layer = layers.find(l => l.id === selectedLayerId);
   if (layer && layer.originalImg) {
+    saveUndoState();
     layer.img = layer.originalImg;
     layer.baseEffectImg = layer.originalImg;
     renderComposite();
@@ -1065,6 +1216,7 @@ document.getElementById('resetCropBtn').addEventListener('click', () => {
 document.getElementById('layerDupBtn').addEventListener('click', () => {
   const layer = layers.find(l => l.id === selectedLayerId);
   if (layer) {
+    saveUndoState();
     const copy = {
       ...layer,
       id: Date.now() + Math.random(),
@@ -1082,6 +1234,7 @@ document.getElementById('layerDupBtn').addEventListener('click', () => {
 document.getElementById('layerUpBtn').addEventListener('click', () => {
   const idx = layers.findIndex(l => l.id === selectedLayerId);
   if (idx >= 0 && idx < layers.length - 1) {
+    saveUndoState();
     [layers[idx], layers[idx + 1]] = [layers[idx + 1], layers[idx]];
     updateLayerSelectUI();
     selectLayer(selectedLayerId);
@@ -1092,6 +1245,7 @@ document.getElementById('layerUpBtn').addEventListener('click', () => {
 document.getElementById('layerDownBtn').addEventListener('click', () => {
   const idx = layers.findIndex(l => l.id === selectedLayerId);
   if (idx > 0) {
+    saveUndoState();
     [layers[idx], layers[idx - 1]] = [layers[idx - 1], layers[idx]];
     updateLayerSelectUI();
     selectLayer(selectedLayerId);
@@ -1100,6 +1254,7 @@ document.getElementById('layerDownBtn').addEventListener('click', () => {
 });
 
 document.getElementById('layerDeleteBtn').addEventListener('click', () => {
+  saveUndoState();
   layers = layers.filter(l => l.id !== selectedLayerId);
   updateLayerSelectUI();
   if (layers.length > 0) selectLayer(layers[layers.length - 1].id);
@@ -1131,6 +1286,7 @@ document.getElementById('tabPin').addEventListener('click', () => switchMode('pi
 document.getElementById('tabPull').addEventListener('click', () => switchMode('pull'));
 
 document.getElementById('globalInvertCheck').addEventListener('change', (e) => {
+  saveUndoState();
   globalInvert = e.target.checked;
   renderComposite();
 });
@@ -1196,6 +1352,7 @@ document.getElementById('presetSlowBtn').addEventListener('click', () => {
 });
 
 document.getElementById('resetDeformBtn').addEventListener('click', () => {
+  saveUndoState();
   initMesh();
 });
 
@@ -1217,6 +1374,7 @@ document.getElementById('saveBtn').addEventListener('click', () => {
   exportCanvas.height = docHeight;
   const exportCtx = exportCanvas.getContext('2d');
 
+  // 保存時は市松模様を描画せず、透明背景のままPNG出力する
   if (!isDeformed) {
     exportCtx.drawImage(offCanvas, 0, 0);
   } else {
@@ -1268,5 +1426,5 @@ window.addEventListener('resize', () => {
 });
 
 // 初期起動
-resizeWorkspace(800, 800);
+resizeWorkspace(800, 800, false);
 requestAnimationFrame(animate);
