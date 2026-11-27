@@ -5,25 +5,24 @@ const ctx = canvas.getContext('2d');
 const offCanvas = document.createElement('canvas');
 const offCtx = offCanvas.getContext('2d');
 
-// 実際の画像サイズ（ドキュメントサイズ）
 let docWidth = 800;
 let docHeight = 800;
 
-// カメラ（表示位置・拡大率）の状態
 let view = {
   scale: 1,
   x: 0,
   y: 0
 };
 
-// アプリの状態
 let mode = 'edit'; // 'edit' | 'pan' | 'pin' | 'pull'
 let hideGuides = false;
+let freezePull = false; // 引っ張った状態で止めるかどうか
+let syncPins = true;    // 赤い円をすべて同時に動かすかどうか
+
 let bgConfig = { type: 'solid', color1: '#ffffff', color2: '#a2d2ff', img: null };
 let layers = [];
 let selectedLayerId = null;
 
-// 引っ張り用（軽量化のためメッシュ分割を24x24に最適化し、静止時は描画スキップ）
 let pinAreas = [];
 let selectedPinId = null;
 let stiffness = 0.16;
@@ -31,16 +30,14 @@ const damping = 0.82;
 const COLS = 24;
 const ROWS = 24;
 let points = [];
-let isDeformed = false; // 変形中かどうか（falseの時は超高速描画）
+let isDeformed = false;
 
-// ビューポートのサイズに合わせてキャンバス解像度を合わせる
 function syncViewportSize() {
   const rect = viewport.getBoundingClientRect();
   canvas.width = rect.width;
   canvas.height = rect.height;
 }
 
-// 画面全体にちょうど収まる初期倍率と位置にリセット
 function resetView() {
   syncViewportSize();
   const margin = 36;
@@ -136,6 +133,17 @@ function drawGeneratedBackground(context, w, h) {
     grad.addColorStop(1, color2);
     context.fillStyle = grad;
     context.fillRect(0, 0, w, h);
+  } else if (type === 'rainbow') {
+    const grad = context.createLinearGradient(0, 0, w, h);
+    grad.addColorStop(0, '#ff3b30');
+    grad.addColorStop(0.17, '#ff9500');
+    grad.addColorStop(0.34, '#ffcc00');
+    grad.addColorStop(0.51, '#34c759');
+    grad.addColorStop(0.68, '#00c7be');
+    grad.addColorStop(0.85, '#007aff');
+    grad.addColorStop(1, '#af52de');
+    context.fillStyle = grad;
+    context.fillRect(0, 0, w, h);
   } else if (type === 'dots') {
     context.fillStyle = color1;
     context.fillRect(0, 0, w, h);
@@ -209,14 +217,54 @@ function drawTexturedTriangle(targetCtx, p0, p1, p2) {
   targetCtx.restore();
 }
 
+// 現在の変形状態を指定のコンテキストに描画する共通関数（表示用と保存用で共用）
+function drawDeformedMesh(targetCtx) {
+  const triangles = [];
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      const i0 = r * (COLS + 1) + c;
+      const i1 = i0 + 1;
+      const i2 = (r + 1) * (COLS + 1) + c;
+      const i3 = i2 + 1;
+
+      const t1 = [points[i0], points[i1], points[i2]];
+      const t2 = [points[i1], points[i3], points[i2]];
+
+      const grabBonus1 = (t1[0].grabbed || t1[1].grabbed || t1[2].grabbed) ? 10000 : 0;
+      const grabBonus2 = (t2[0].grabbed || t2[1].grabbed || t2[2].grabbed) ? 10000 : 0;
+
+      const disp1 = Math.max(
+        Math.hypot(t1[0].x - t1[0].ox, t1[0].y - t1[0].oy),
+        Math.hypot(t1[1].x - t1[1].ox, t1[1].y - t1[1].oy),
+        Math.hypot(t1[2].x - t1[2].ox, t1[2].y - t1[2].oy)
+      ) + grabBonus1;
+
+      const disp2 = Math.max(
+        Math.hypot(t2[0].x - t2[0].ox, t2[0].y - t2[0].oy),
+        Math.hypot(t2[1].x - t2[1].ox, t2[1].y - t2[1].oy),
+        Math.hypot(t2[2].x - t2[2].ox, t2[2].y - t2[2].oy)
+      ) + grabBonus2;
+
+      triangles.push({ pts: t1, score: disp1 });
+      triangles.push({ pts: t2, score: disp2 });
+    }
+  }
+
+  triangles.sort((a, b) => a.score - b.score);
+
+  for (let tri of triangles) {
+    drawTexturedTriangle(targetCtx, tri.pts[0], tri.pts[1], tri.pts[2]);
+  }
+}
+
 function renderFrame() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-  // 変形中のみバネ物理演算を実行（静止時はスキップして超軽量化）
+  // 変形中かつフリーズ（固定）がオフの時だけバネで元に戻る計算をする
   if (isDeformed) {
-    let anyMoving = false;
+    let anyDeformed = false;
     for (let p of points) {
-      if (!p.grabbed) {
+      if (!p.grabbed && !freezePull) {
         const fx = (p.ox - p.x) * stiffness;
         const fy = (p.oy - p.y) * stiffness;
         p.vx = (p.vx + fx) * damping;
@@ -225,7 +273,7 @@ function renderFrame() {
         p.y += p.vy;
 
         if (Math.abs(p.ox - p.x) > 0.1 || Math.abs(p.oy - p.y) > 0.1 || Math.abs(p.vx) > 0.1 || Math.abs(p.vy) > 0.1) {
-          anyMoving = true;
+          anyDeformed = true;
         } else {
           p.x = p.ox;
           p.y = p.oy;
@@ -233,70 +281,32 @@ function renderFrame() {
           p.vy = 0;
         }
       } else {
-        anyMoving = true;
+        if (Math.abs(p.ox - p.x) > 0.1 || Math.abs(p.oy - p.y) > 0.1 || p.grabbed) {
+          anyDeformed = true;
+        }
       }
     }
-    if (!anyMoving) {
+    if (!anyDeformed) {
       isDeformed = false;
     }
   }
 
   ctx.save();
-  // カメラの拡大率・位置を適用
   ctx.translate(view.x, view.y);
   ctx.scale(view.scale, view.scale);
 
   if (!isDeformed) {
-    // 静止時は1枚の画像として一発描画（超高速）
     ctx.drawImage(offCanvas, 0, 0);
   } else {
-    // 引っ張り中・戻りアニメーション中のみメッシュ描画
-    const triangles = [];
-    for (let r = 0; r < ROWS; r++) {
-      for (let c = 0; c < COLS; c++) {
-        const i0 = r * (COLS + 1) + c;
-        const i1 = i0 + 1;
-        const i2 = (r + 1) * (COLS + 1) + c;
-        const i3 = i2 + 1;
-
-        const t1 = [points[i0], points[i1], points[i2]];
-        const t2 = [points[i1], points[i3], points[i2]];
-
-        const grabBonus1 = (t1[0].grabbed || t1[1].grabbed || t1[2].grabbed) ? 10000 : 0;
-        const grabBonus2 = (t2[0].grabbed || t2[1].grabbed || t2[2].grabbed) ? 10000 : 0;
-
-        const disp1 = Math.max(
-          Math.hypot(t1[0].x - t1[0].ox, t1[0].y - t1[0].oy),
-          Math.hypot(t1[1].x - t1[1].ox, t1[1].y - t1[1].oy),
-          Math.hypot(t1[2].x - t1[2].ox, t1[2].y - t1[2].oy)
-        ) + grabBonus1;
-
-        const disp2 = Math.max(
-          Math.hypot(t2[0].x - t2[0].ox, t2[0].y - t2[0].oy),
-          Math.hypot(t2[1].x - t2[1].ox, t2[1].y - t2[1].oy),
-          Math.hypot(t2[2].x - t2[2].ox, t2[2].y - t2[2].oy)
-        ) + grabBonus2;
-
-        triangles.push({ pts: t1, score: disp1 });
-        triangles.push({ pts: t2, score: disp2 });
-      }
-    }
-
-    triangles.sort((a, b) => a.score - b.score);
-
-    for (let tri of triangles) {
-      drawTexturedTriangle(ctx, tri.pts[0], tri.pts[1], tri.pts[2]);
-    }
+    drawDeformedMesh(ctx);
   }
 
   // ガイド線の描画
   if (!hideGuides) {
-    // 外枠
     ctx.strokeStyle = 'rgba(0, 0, 0, 0.25)';
     ctx.lineWidth = 2 / view.scale;
     ctx.strokeRect(0, 0, docWidth, docHeight);
 
-    // 編集モード時の選択レイヤー枠
     if (mode === 'edit' && selectedLayerId) {
       const layer = layers.find(l => l.id === selectedLayerId);
       if (layer) {
@@ -313,7 +323,6 @@ function renderFrame() {
       }
     }
 
-    // 範囲指定モード時の赤い円
     if (mode === 'pin' && pinAreas.length > 0) {
       pinAreas.forEach((pin, index) => {
         const isSelected = pin.id === selectedPinId;
@@ -345,7 +354,6 @@ function animate() {
   requestAnimationFrame(animate);
 }
 
-// 画面上のタッチ座標を画像内の座標(docX, docY)に変換
 function screenToDoc(clientX, clientY) {
   const rect = canvas.getBoundingClientRect();
   const sx = clientX - rect.left;
@@ -358,11 +366,10 @@ function screenToDoc(clientX, clientY) {
   };
 }
 
-// マルチタッチ管理（指1本操作と指2本ピンチ拡大・移動の両立）
 let activePointers = new Map();
 let lastPinchDist = null;
 let lastPinchCenter = null;
-let singleAction = null; // 'layer' | 'pan' | 'pin' | 'pull' | null
+let singleAction = null;
 let dragOffset = { x: 0, y: 0 };
 let pullDragStart = { x: 0, y: 0 };
 
@@ -370,7 +377,6 @@ canvas.addEventListener('pointerdown', (e) => {
   canvas.setPointerCapture(e.pointerId);
   activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
-  // 指が2本以上になった瞬間：ピンチ拡大＆2本指移動モードへ移行
   if (activePointers.size >= 2) {
     singleAction = null;
     for (let p of points) p.grabbed = false;
@@ -384,7 +390,6 @@ canvas.addEventListener('pointerdown', (e) => {
     return;
   }
 
-  // 指1本での操作開始
   const pos = screenToDoc(e.clientX, e.clientY);
 
   if (mode === 'pan') {
@@ -394,7 +399,6 @@ canvas.addEventListener('pointerdown', (e) => {
   }
 
   if (mode === 'edit') {
-    // レイヤーをタッチしたか判定
     for (let i = layers.length - 1; i >= 0; i--) {
       const l = layers[i];
       const hw = (l.img.width * l.scale) / 2;
@@ -406,7 +410,6 @@ canvas.addEventListener('pointerdown', (e) => {
         return;
       }
     }
-    // レイヤー以外の余白を触った場合は画面移動（パン）にする
     singleAction = 'pan';
     dragOffset = { x: pos.sx - view.x, y: pos.sy - view.y };
 
@@ -437,18 +440,28 @@ canvas.addEventListener('pointerdown', (e) => {
     pullDragStart = { x: pos.x, y: pos.y };
 
     if (pinAreas.length > 0) {
-      const hitAnyPin = pinAreas.some(pin => Math.hypot(pos.x - pin.x, pos.y - pin.y) <= pin.radius);
-      if (!hitAnyPin) {
-        // 赤い円の外側を触った場合は画面移動できるようにする
+      // タッチした位置にある赤い円を探す（上から順に判定）
+      let hitPin = null;
+      for (let i = pinAreas.length - 1; i >= 0; i--) {
+        if (Math.hypot(pos.x - pinAreas[i].x, pos.y - pinAreas[i].y) <= pinAreas[i].radius) {
+          hitPin = pinAreas[i];
+          break;
+        }
+      }
+
+      if (!hitPin) {
         singleAction = 'pan';
         dragOffset = { x: pos.sx - view.x, y: pos.sy - view.y };
         return;
       }
 
       isDeformed = true;
+      // 「すべて同時(syncPins)」なら全円、オフなら「タッチした円(hitPin)1個だけ」を対象にする
+      const targetPins = syncPins ? pinAreas : [hitPin];
+
       for (let p of points) {
         let maxInf = 0;
-        for (let pin of pinAreas) {
+        for (let pin of targetPins) {
           const dist = Math.hypot(p.ox - pin.x, p.oy - pin.y);
           if (dist < pin.radius) {
             const inf = Math.cos((dist / pin.radius) * (Math.PI / 2));
@@ -482,7 +495,6 @@ canvas.addEventListener('pointermove', (e) => {
   if (!activePointers.has(e.pointerId)) return;
   activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
-  // 指2本でのピンチ拡大＆視点移動
   if (activePointers.size >= 2) {
     const pts = Array.from(activePointers.values());
     const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
@@ -497,7 +509,6 @@ canvas.addEventListener('pointermove', (e) => {
       const newScale = Math.min(Math.max(view.scale * zoomFactor, 0.2), 5.0);
       const actualFactor = newScale / view.scale;
 
-      // 2本指の中心を基準に拡大縮小＆移動
       view.x = center.x - (center.x - view.x) * actualFactor + (center.x - lastPinchCenter.x);
       view.y = center.y - (center.y - view.y) * actualFactor + (center.y - lastPinchCenter.y);
       view.scale = newScale;
@@ -509,7 +520,6 @@ canvas.addEventListener('pointermove', (e) => {
     return;
   }
 
-  // 指1本でのドラッグ操作
   const pos = screenToDoc(e.clientX, e.clientY);
 
   if (singleAction === 'pan') {
@@ -559,7 +569,6 @@ function handlePointerEnd(e) {
 canvas.addEventListener('pointerup', handlePointerEnd);
 canvas.addEventListener('pointercancel', handlePointerEnd);
 
-// PCマウスホイールでの拡大縮小にも対応
 canvas.addEventListener('wheel', (e) => {
   e.preventDefault();
   const rect = canvas.getBoundingClientRect();
@@ -577,7 +586,7 @@ canvas.addEventListener('wheel', (e) => {
 
 document.getElementById('resetViewBtn').addEventListener('click', resetView);
 
-// 安全かつ確実に画像を読み込む共通関数（読み込みサイズを900pxに最適化して軽量化）
+// 画像読み込み
 function loadSafeImage(file, buttonElement, originalText, callback) {
   if (!file) return;
   if (buttonElement) buttonElement.textContent = '読み込み中...';
@@ -633,7 +642,6 @@ function loadSafeImage(file, buttonElement, originalText, callback) {
   reader.readAsDataURL(file);
 }
 
-// 1. ベース写真読み込み
 const bgImageInput = document.getElementById('bgImageInput');
 const bgImageBtn = document.getElementById('bgImageBtn');
 
@@ -650,7 +658,6 @@ bgImageInput.addEventListener('change', (e) => {
   });
 });
 
-// 2. 重ねる写真追加
 const addLayerInput = document.getElementById('addLayerInput');
 const addLayerBtn = document.getElementById('addLayerBtn');
 
@@ -684,12 +691,14 @@ addLayerInput.addEventListener('change', (e) => {
   });
 });
 
+// テキスト追加（虹色対応）
 document.getElementById('addTextBtn').addEventListener('click', () => {
   const input = document.getElementById('textInput');
   const text = input.value.trim();
   if (!text) return;
 
   const color = document.getElementById('textColor').value;
+  const isRainbow = document.getElementById('textRainbowCheck').checked;
 
   const tCanvas = document.createElement('canvas');
   const tCtx = tCanvas.getContext('2d');
@@ -701,9 +710,23 @@ document.getElementById('addTextBtn').addEventListener('click', () => {
   tCanvas.height = fontSize + 40;
 
   tCtx.font = `bold ${fontSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
-  tCtx.fillStyle = color;
   tCtx.textAlign = 'center';
   tCtx.textBaseline = 'middle';
+
+  if (isRainbow) {
+    const grad = tCtx.createLinearGradient(20, 0, tCanvas.width - 20, 0);
+    grad.addColorStop(0, '#ff3b30');
+    grad.addColorStop(0.17, '#ff9500');
+    grad.addColorStop(0.34, '#ffcc00');
+    grad.addColorStop(0.51, '#34c759');
+    grad.addColorStop(0.68, '#00c7be');
+    grad.addColorStop(0.85, '#007aff');
+    grad.addColorStop(1, '#af52de');
+    tCtx.fillStyle = grad;
+  } else {
+    tCtx.fillStyle = color;
+  }
+
   tCtx.fillText(text, tCanvas.width / 2, tCanvas.height / 2);
 
   const img = new Image();
@@ -841,6 +864,14 @@ document.getElementById('hideGuidesCheck').addEventListener('change', (e) => {
   hideGuides = e.target.checked;
 });
 
+document.getElementById('freezePullCheck').addEventListener('change', (e) => {
+  freezePull = e.target.checked;
+});
+
+document.getElementById('syncPinsCheck').addEventListener('change', (e) => {
+  syncPins = e.target.checked;
+});
+
 document.getElementById('pinRadiusSlider').addEventListener('input', (e) => {
   const newRadius = Number(e.target.value);
   if (selectedPinId) {
@@ -851,6 +882,10 @@ document.getElementById('pinRadiusSlider').addEventListener('input', (e) => {
 
 document.getElementById('springSlider').addEventListener('input', (e) => {
   stiffness = Number(e.target.value);
+});
+
+document.getElementById('resetDeformBtn').addEventListener('click', () => {
+  initMesh();
 });
 
 document.getElementById('deleteOnePinBtn').addEventListener('click', () => {
@@ -865,9 +900,20 @@ document.getElementById('clearPinBtn').addEventListener('click', () => {
   selectedPinId = null;
 });
 
-// 保存時は合成キャンバス(offCanvas)をそのまま高画質で出力
+// 今の変形状態（引っ張って止めた形、または戻り途中の形）をそのまま保存する
 document.getElementById('saveBtn').addEventListener('click', () => {
-  offCanvas.toBlob((blob) => {
+  const exportCanvas = document.createElement('canvas');
+  exportCanvas.width = docWidth;
+  exportCanvas.height = docHeight;
+  const exportCtx = exportCanvas.getContext('2d');
+
+  if (!isDeformed) {
+    exportCtx.drawImage(offCanvas, 0, 0);
+  } else {
+    drawDeformedMesh(exportCtx);
+  }
+
+  exportCanvas.toBlob((blob) => {
     if (!blob) {
       alert('画像の生成に失敗しました。');
       return;
